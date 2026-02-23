@@ -173,7 +173,7 @@ export default async function Home() {
   }
 
   return (
-    <main className="relative min-h-screen overflow-hidden bg-[radial-gradient(circle_at_12%_14%,#f6d8ea_0%,transparent_54%),radial-gradient(circle_at_84%_18%,#f9d4e3_0%,transparent_47%),radial-gradient(circle_at_68%_84%,#f3dff0_0%,transparent_44%),#fff4f8] p-5 dark:bg-[radial-gradient(circle_at_10%_12%,#0f766e_0%,transparent_38%),radial-gradient(circle_at_82%_20%,#854d0e_0%,transparent_35%),radial-gradient(circle_at_70%_88%,#1d4ed8_0%,transparent_35%),#020617] sm:p-10">
+    <main className="relative min-h-screen overflow-hidden bg-[radial-gradient(circle_at_12%_14%,#f7ddcb_0%,transparent_54%),radial-gradient(circle_at_84%_18%,#f9dcc8_0%,transparent_47%),radial-gradient(circle_at_68%_84%,#f6e5d7_0%,transparent_44%),#f2f1f0] p-5 dark:bg-[radial-gradient(circle_at_10%_12%,#0f766e_0%,transparent_38%),radial-gradient(circle_at_82%_20%,#854d0e_0%,transparent_35%),radial-gradient(circle_at_70%_88%,#1d4ed8_0%,transparent_35%),#020617] sm:p-10">
       <div className="mx-auto flex w-full items-start justify-center py-3 sm:py-8">
         {mergedParentRuns.length > 0 ? (
           <EmulatedRunsDashboard

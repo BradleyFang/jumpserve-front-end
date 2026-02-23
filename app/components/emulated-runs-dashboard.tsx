@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 export type EmulatedParentRun = {
   id: number;
@@ -40,8 +40,34 @@ type ChartSeries = {
   runId: number;
   shortLabel: string;
   label: string;
+  clientSummary: string;
   color: string;
   data: EmulatedPerSecondStat[];
+};
+
+type HoveredChartPoint = {
+  runId: number;
+  runSummary: string;
+  color: string;
+  x: number;
+  y: number;
+  xValue: number;
+  yValue: number;
+};
+
+type HoveredSliceValue = {
+  runId: number;
+  shortLabel: string;
+  color: string;
+  yValue: number;
+  pointX: number;
+  pointY: number;
+};
+
+type HoveredSlice = {
+  x: number;
+  xValue: number;
+  values: HoveredSliceValue[];
 };
 
 const METRICS: MetricSpec[] = [
@@ -76,17 +102,40 @@ const SERIES_COLORS = [
   "#0369a1",
 ];
 
-function formatTimestamp(value: string | null) {
-  if (!value) {
+const THROUGHPUT_AXIS_MAX_MBPS = 120;
+const THROUGHPUT_AXIS_TICK_STEP_MBPS = 40;
+const THROUGHPUT_SUM_SERIES_ID = -1;
+
+function formatClientSummary(run: EmulatedRun | null) {
+  if (!run) {
     return "n/a";
   }
 
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
+  const ccaLabel =
+    run.congestionControlAlgorithmName ??
+    (run.congestionControlAlgorithmId !== null
+      ? `id ${run.congestionControlAlgorithmId}`
+      : "n/a");
+  const delayLabel =
+    run.delayAddedMs !== null ? `${run.delayAddedMs}ms` : "n/a";
+
+  return `${ccaLabel}, ${delayLabel}`;
+}
+
+function formatClientDropdownSummary(run: EmulatedRun | null) {
+  if (!run) {
     return "n/a";
   }
 
-  return date.toLocaleString();
+  const ccaLabel =
+    run.congestionControlAlgorithmName ??
+    (run.congestionControlAlgorithmId !== null
+      ? `id ${run.congestionControlAlgorithmId}`
+      : "n/a");
+  const delayLabel =
+    run.delayAddedMs !== null ? `${run.delayAddedMs}ms` : "n/a";
+
+  return `${ccaLabel} ${delayLabel}`;
 }
 
 function trimTrailingZeros(value: string) {
@@ -166,7 +215,10 @@ export function EmulatedRunsDashboard({
   const [selectedParentRunId, setSelectedParentRunId] = useState<number | null>(
     parentRuns[0]?.id ?? null,
   );
+  const [isParentMenuOpen, setIsParentMenuOpen] = useState(false);
   const [expandedMetricId, setExpandedMetricId] = useState<string | null>(null);
+  const [hoveredMetricId, setHoveredMetricId] = useState<string | null>(null);
+  const parentMenuRef = useRef<HTMLDivElement | null>(null);
 
   const runsByParent = useMemo(() => {
     const grouped = new Map<number, EmulatedRun[]>();
@@ -221,16 +273,29 @@ export function EmulatedRunsDashboard({
 
   const parentOptions = useMemo(
     () =>
-      parentRuns.map((parentRun) => ({
-        ...parentRun,
-        childRunCount: runsByParent.get(parentRun.id)?.length ?? 0,
-      })),
+      parentRuns.map((parentRun) => {
+        const childRuns = runsByParent.get(parentRun.id) ?? [];
+        const client1Run =
+          childRuns.find((run) => run.clientNumber === 1) ?? null;
+        const client2Run =
+          childRuns.find((run) => run.clientNumber === 2) ?? null;
+
+        return {
+          ...parentRun,
+          childRunCount: childRuns.length,
+          client1Summary: formatClientDropdownSummary(client1Run),
+          client2Summary: formatClientDropdownSummary(client2Run),
+        };
+      }),
     [parentRuns, runsByParent],
   );
 
   const selectedParentRun =
     parentOptions.find((parentRun) => parentRun.id === selectedParentRunId) ??
     null;
+  const selectedParentLabel = selectedParentRun
+    ? `Parent #${selectedParentRun.id}: ${selectedParentRun.client1Summary} | ${selectedParentRun.client2Summary}`
+    : "Select parent run";
   const selectedRuns = selectedParentRunId
     ? (runsByParent.get(selectedParentRunId) ?? [])
     : [];
@@ -246,22 +311,14 @@ export function EmulatedRunsDashboard({
       runId: run.id,
       shortLabel: ccaLabel,
       label: ccaLabel,
+      clientSummary: formatClientSummary(run),
       color: SERIES_COLORS[index % SERIES_COLORS.length],
       data: statsByRun.get(run.id) ?? [],
     };
   });
 
-  const uniqueAlgorithms = Array.from(
-    new Set(
-      selectedRuns.map((run) =>
-        run.congestionControlAlgorithmName
-          ? run.congestionControlAlgorithmName
-          : run.congestionControlAlgorithmId !== null
-            ? `id ${run.congestionControlAlgorithmId}`
-            : "n/a",
-      ),
-    ),
-  ).join(", ");
+  const client1Run = selectedRuns.find((run) => run.clientNumber === 1) ?? null;
+  const client2Run = selectedRuns.find((run) => run.clientNumber === 2) ?? null;
 
   const totalSampleCount = chartSeries.reduce(
     (total, series) => total + series.data.length,
@@ -287,6 +344,32 @@ export function EmulatedRunsDashboard({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [expandedMetric]);
 
+  useEffect(() => {
+    if (!isParentMenuOpen) {
+      return;
+    }
+
+    const onPointerDown = (event: PointerEvent) => {
+      if (parentMenuRef.current?.contains(event.target as Node)) {
+        return;
+      }
+      setIsParentMenuOpen(false);
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsParentMenuOpen(false);
+      }
+    };
+
+    window.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [isParentMenuOpen]);
+
   return (
     <>
       <section className="w-full max-w-6xl rounded-3xl border border-rose-200/70 bg-[#fff8fc]/95 p-6 shadow-2xl backdrop-blur-sm dark:border-slate-700/70 dark:bg-slate-900/80 sm:p-8">
@@ -305,21 +388,63 @@ export function EmulatedRunsDashboard({
         </div>
         <label className="flex w-full flex-col gap-2 text-sm font-medium text-slate-700 dark:text-slate-200 sm:max-w-md">
           Select parent run
-          <select
-            className="w-full rounded-xl border border-rose-300/80 bg-[#fff5fb] px-3 py-2 text-sm shadow-sm outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-200 dark:border-slate-600 dark:bg-slate-950 dark:text-slate-100 dark:focus:ring-teal-700/60"
-            value={selectedParentRunId ?? ""}
-            onChange={(event) => {
-              const nextValue = Number(event.currentTarget.value);
-              setSelectedParentRunId(Number.isFinite(nextValue) ? nextValue : null);
-            }}
-          >
-            {parentOptions.map((parentRun) => (
-              <option key={parentRun.id} value={parentRun.id}>
-                Parent #{parentRun.id} | {parentRun.childRunCount} child run
-                {parentRun.childRunCount === 1 ? "" : "s"}
-              </option>
-            ))}
-          </select>
+          <div className="relative" ref={parentMenuRef}>
+            <button
+              type="button"
+              className={`flex w-full items-center justify-between gap-3 rounded-2xl border px-3 py-2.5 text-left text-sm shadow-sm outline-none transition ${
+                isParentMenuOpen
+                  ? "border-rose-400 bg-white shadow-md dark:border-slate-500 dark:bg-slate-900 dark:shadow-none"
+                  : "border-rose-300/80 bg-[#fff5fb] hover:border-rose-300 dark:border-slate-600 dark:bg-slate-950"
+              } focus:border-teal-500 focus:ring-2 focus:ring-teal-200 dark:text-slate-100 dark:focus:ring-teal-700/60`}
+              aria-haspopup="listbox"
+              aria-expanded={isParentMenuOpen}
+              onClick={() => setIsParentMenuOpen((current) => !current)}
+            >
+              <span className="truncate">{selectedParentLabel}</span>
+              <svg
+                viewBox="0 0 20 20"
+                className={`h-4 w-4 shrink-0 text-slate-500 transition-transform dark:text-slate-400 ${
+                  isParentMenuOpen ? "rotate-180" : ""
+                }`}
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+              >
+                <path d="M5.5 7.5 10 12l4.5-4.5" strokeLinecap="round" />
+              </svg>
+            </button>
+            {isParentMenuOpen ? (
+              <div className="absolute z-20 mt-2 max-h-72 w-full overflow-y-auto rounded-2xl border border-rose-200/90 bg-white p-1.5 shadow-xl dark:border-slate-700 dark:bg-slate-900">
+                {parentOptions.map((parentRun) => {
+                  const isSelected = selectedParentRunId === parentRun.id;
+                  return (
+                    <button
+                      key={parentRun.id}
+                      type="button"
+                      role="option"
+                      aria-selected={isSelected}
+                      className={`mb-1 w-full rounded-xl border px-3 py-2 text-left transition last:mb-0 ${
+                        isSelected
+                          ? "border-rose-300 bg-rose-50/70 shadow-sm dark:border-slate-500 dark:bg-slate-800/70"
+                          : "border-transparent hover:border-rose-200 hover:bg-rose-50/45 dark:hover:border-slate-600 dark:hover:bg-slate-800/45"
+                      }`}
+                      onClick={() => {
+                        setSelectedParentRunId(parentRun.id);
+                        setIsParentMenuOpen(false);
+                      }}
+                    >
+                      <span className="block text-xs uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
+                        Parent #{parentRun.id}
+                      </span>
+                      <span className="mt-0.5 block text-sm text-slate-800 dark:text-slate-100">
+                        {parentRun.client1Summary} | {parentRun.client2Summary}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : null}
+          </div>
         </label>
       </div>
 
@@ -327,15 +452,9 @@ export function EmulatedRunsDashboard({
         <>
           <dl className="mb-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <MetaItem label="Parent Run ID" value={String(selectedParentRun.id)} />
-            <MetaItem
-              label="Parent Created"
-              value={formatTimestamp(selectedParentRun.createdAt)}
-            />
             <MetaItem label="Child Runs" value={String(selectedRuns.length)} />
-            <MetaItem
-              label="Algorithms"
-              value={uniqueAlgorithms.length > 0 ? uniqueAlgorithms : "n/a"}
-            />
+            <MetaItem label="Client 1" value={formatClientSummary(client1Run)} />
+            <MetaItem label="Client 2" value={formatClientSummary(client2Run)} />
           </dl>
 
           {selectedRuns.length > 0 ? (
@@ -343,15 +462,32 @@ export function EmulatedRunsDashboard({
               <p className="mb-3 text-xs uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
                 {totalSampleCount} total samples across selected child runs
               </p>
-              <div className="grid gap-5 lg:grid-cols-3">
+              <div
+                className="grid gap-5 lg:grid-cols-3"
+                onMouseLeave={() => setHoveredMetricId(null)}
+              >
                 {METRICS.map((metric) => (
                   <MetricChart
                     key={metric.id}
+                    metricId={metric.id}
                     series={chartSeries}
                     title={metric.title}
                     unit={metric.unit}
                     accessor={metric.accessor}
-                    onExpand={() => setExpandedMetricId(metric.id)}
+                    onExpand={() => {
+                      setHoveredMetricId(null);
+                      setExpandedMetricId(metric.id);
+                    }}
+                    onCardHoverStart={() => setHoveredMetricId(metric.id)}
+                    onCardHoverEnd={() =>
+                      setHoveredMetricId((current) =>
+                        current === metric.id ? null : current,
+                      )
+                    }
+                    isActive={hoveredMetricId === metric.id}
+                    isDimmed={
+                      hoveredMetricId !== null && hoveredMetricId !== metric.id
+                    }
                   />
                 ))}
               </div>
@@ -386,6 +522,7 @@ export function EmulatedRunsDashboard({
               </button>
             </div>
             <MetricChart
+              metricId={expandedMetric.id}
               series={chartSeries}
               title={expandedMetric.title}
               unit={expandedMetric.unit}
@@ -421,21 +558,37 @@ function EmptyState({ text }: { text: string }) {
 }
 
 function MetricChart({
+  metricId,
   series,
   title,
   unit,
   accessor,
   onExpand,
   size = "default",
+  onCardHoverStart,
+  onCardHoverEnd,
+  isActive = false,
+  isDimmed = false,
 }: {
+  metricId: string;
   series: ChartSeries[];
   title: string;
   unit: string;
   accessor: (point: EmulatedPerSecondStat) => number | null;
   onExpand?: () => void;
   size?: "default" | "expanded";
+  onCardHoverStart?: () => void;
+  onCardHoverEnd?: () => void;
+  isActive?: boolean;
+  isDimmed?: boolean;
 }) {
   const [hoveredRunId, setHoveredRunId] = useState<number | null>(null);
+  const [hoveredPoint, setHoveredPoint] = useState<HoveredChartPoint | null>(
+    null,
+  );
+  const [hoveredSlice, setHoveredSlice] = useState<HoveredSlice | null>(null);
+  const [pinnedRunId, setPinnedRunId] = useState<number | null>(null);
+  const [pinnedPoint, setPinnedPoint] = useState<HoveredChartPoint | null>(null);
   const isExpanded = size === "expanded";
   const chartWidth = isExpanded ? 1200 : 460;
   const chartHeight = isExpanded ? 620 : 220;
@@ -445,6 +598,34 @@ function MetricChart({
   const bottomPadding = isExpanded ? 94 : 52;
   const plotWidth = chartWidth - leftPadding - rightPadding;
   const plotHeight = chartHeight - topPadding - bottomPadding;
+  const cardShellClassName = `transition-opacity duration-[400ms] ${
+    isDimmed ? "opacity-65" : "opacity-100"
+  }`;
+  const cardClassName = `rounded-2xl border border-rose-200/80 bg-[#fff8fc] p-4 shadow-sm transition-[border-color,box-shadow,transform] duration-[400ms] will-change-transform dark:border-slate-700 dark:bg-slate-900/50 ${
+    isDimmed
+      ? ""
+      : `${isActive ? "-translate-y-3 scale-[1.02] border-rose-500 shadow-2xl dark:border-slate-500 dark:shadow-none" : ""} focus-within:-translate-y-3 focus-within:scale-[1.02] focus-within:border-rose-500 focus-within:shadow-2xl dark:focus-within:border-slate-500 dark:focus-within:shadow-none`
+  }`;
+  const activeRunId = pinnedRunId ?? hoveredRunId;
+  const displayedPoint = pinnedPoint ?? hoveredPoint;
+
+  useEffect(() => {
+    if (pinnedRunId === null) {
+      return;
+    }
+
+    const clearPinnedSelection = () => {
+      setPinnedRunId(null);
+      setPinnedPoint(null);
+      setHoveredRunId(null);
+      setHoveredPoint(null);
+      setHoveredSlice(null);
+    };
+
+    document.addEventListener("pointerdown", clearPinnedSelection, true);
+    return () =>
+      document.removeEventListener("pointerdown", clearPinnedSelection, true);
+  }, [pinnedRunId]);
 
   const normalizedSeries = series
     .map((runSeries) => {
@@ -471,14 +652,28 @@ function MetricChart({
 
   if (normalizedSeries.length === 0) {
     return (
-      <article className="rounded-2xl border border-rose-200/80 bg-[#fff8fc] p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900/50">
-        <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-          {title}
-        </h2>
-        <p className="mt-3 text-sm text-slate-500 dark:text-slate-400">
-          No points available for this metric.
-        </p>
-      </article>
+      <div
+        className={cardShellClassName}
+        onMouseEnter={() => onCardHoverStart?.()}
+        onMouseLeave={() => {
+          setHoveredRunId(null);
+          setHoveredPoint(null);
+          setHoveredSlice(null);
+          onCardHoverEnd?.();
+        }}
+      >
+        <article
+          className={`${cardClassName} ${onExpand ? "cursor-zoom-in" : ""}`}
+          onClick={onExpand}
+        >
+          <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+            {title}
+          </h2>
+          <p className="mt-3 text-sm text-slate-500 dark:text-slate-400">
+            No points available for this metric.
+          </p>
+        </article>
+      </div>
     );
   }
 
@@ -494,8 +689,20 @@ function MetricChart({
   const yMinRaw = Math.min(...yValues);
   const yMaxRaw = Math.max(...yValues);
   const yPadding = Math.max((yMaxRaw - yMinRaw) * 0.12, 0.001);
-  const yScaleMax = Math.max(yMaxRaw + yPadding, 0.001);
-  const yScale = buildNiceYTicks(0, yScaleMax);
+  const yScale =
+    metricId === "mbps"
+      ? {
+          min: 0,
+          max: THROUGHPUT_AXIS_MAX_MBPS,
+          ticks: Array.from(
+            {
+              length:
+                THROUGHPUT_AXIS_MAX_MBPS / THROUGHPUT_AXIS_TICK_STEP_MBPS + 1,
+            },
+            (_, index) => index * THROUGHPUT_AXIS_TICK_STEP_MBPS,
+          ),
+        }
+      : buildNiceYTicks(0, Math.max(yMaxRaw + yPadding, 0.001));
   const yMin = yScale.min;
   const yMax = yScale.max;
   const yTicks = yScale.ticks;
@@ -512,34 +719,83 @@ function MetricChart({
   const yDenominator = yMax === yMin ? 1 : yMax - yMin;
 
   const seriesForRender = normalizedSeries.map((runSeries) => {
-    const svgPoints = runSeries.points.map((point) => ({
-      yValue: point.yValue,
-      x: (() => {
-        const boundedXValue = Math.max(xMin, Math.min(xMax, point.xValue));
-        return leftPadding + ((boundedXValue - xMin) / xDenominator) * plotWidth;
-      })(),
-      y: (() => {
-        const boundedYValue = Math.max(yMin, Math.min(yMax, point.yValue));
-        return (
+    const svgPoints = runSeries.points.map((point) => {
+      const boundedXValue = Math.max(xMin, Math.min(xMax, point.xValue));
+      const boundedYValue = Math.max(yMin, Math.min(yMax, point.yValue));
+      return {
+        xValue: point.xValue,
+        yValue: point.yValue,
+        x: leftPadding + ((boundedXValue - xMin) / xDenominator) * plotWidth,
+        y:
           chartHeight -
           bottomPadding -
-          ((boundedYValue - yMin) / yDenominator) * plotHeight
-        );
-      })(),
-    }));
+          ((boundedYValue - yMin) / yDenominator) * plotHeight,
+      };
+    });
 
     const path = svgPoints
       .map((point, index) => `${index === 0 ? "M" : "L"}${point.x} ${point.y}`)
       .join(" ");
-    const latestPoint = svgPoints[svgPoints.length - 1] ?? null;
 
     return {
       ...runSeries,
       svgPoints,
       path,
-      latestPoint,
     };
   });
+  const throughputSumForRender =
+    metricId === "mbps"
+      ? (() => {
+          const sumByX = new Map<number, number>();
+          for (const runSeries of normalizedSeries) {
+            for (const point of runSeries.points) {
+              const roundedX = Number(point.xValue.toFixed(3));
+              const current = sumByX.get(roundedX) ?? 0;
+              sumByX.set(roundedX, current + point.yValue);
+            }
+          }
+
+          const points = Array.from(sumByX.entries())
+            .map(([xValue, yValue]) => ({ xValue, yValue }))
+            .sort((a, b) => a.xValue - b.xValue);
+
+          if (points.length === 0) {
+            return null;
+          }
+
+          const svgPoints = points.map((point) => {
+            const boundedXValue = Math.max(xMin, Math.min(xMax, point.xValue));
+            const boundedYValue = Math.max(yMin, Math.min(yMax, point.yValue));
+            return {
+              xValue: point.xValue,
+              yValue: point.yValue,
+              x: leftPadding + ((boundedXValue - xMin) / xDenominator) * plotWidth,
+              y:
+                chartHeight -
+                bottomPadding -
+                ((boundedYValue - yMin) / yDenominator) * plotHeight,
+            };
+          });
+
+          const path = svgPoints
+            .map((point, index) => `${index === 0 ? "M" : "L"}${point.x} ${point.y}`)
+            .join(" ");
+
+          return {
+            runId: THROUGHPUT_SUM_SERIES_ID,
+            label: "sum Mbps",
+            shortLabel: "sum Mbps",
+            clientSummary: "sum Mbps",
+            color: "#eab308",
+            data: [] as EmulatedPerSecondStat[],
+            svgPoints,
+            path,
+          };
+        })()
+      : null;
+  const interactiveSeriesForRender = throughputSumForRender
+    ? [...seriesForRender, throughputSumForRender]
+    : seriesForRender;
 
   const chartClassName = isExpanded
     ? "h-[70vh] w-full overflow-visible rounded-xl bg-[#fff2f8] text-slate-300 dark:bg-slate-950/70 dark:text-slate-700"
@@ -552,6 +808,149 @@ function MetricChart({
     : "fill-slate-500 text-[10px] dark:fill-slate-400";
   const hoverTargetStrokeWidth = isExpanded ? 24 : 18;
   const hoverTargetPointRadius = isExpanded ? 14 : 10;
+  const pointDotRadius = isExpanded ? 2.8 : 2.2;
+  const pointHitRadius = isExpanded ? 9 : 6;
+  const tooltipWidth = isExpanded ? 140 : 116;
+  const tooltipHeight = isExpanded ? 50 : 44;
+  const sliceTooltipWidth = isExpanded ? 260 : 220;
+  const sliceTooltipPaddingX = isExpanded ? 10 : 8;
+  const sliceTooltipRowHeight = isExpanded ? 15 : 13;
+
+  const toHoveredPoint = (
+    runSeries: (typeof interactiveSeriesForRender)[number],
+    point: {
+      xValue: number;
+      yValue: number;
+      x: number;
+      y: number;
+    },
+  ): HoveredChartPoint => ({
+    runId: runSeries.runId,
+    runSummary: runSeries.clientSummary,
+    color: runSeries.color,
+    x: point.x,
+    y: point.y,
+    xValue: point.xValue,
+    yValue: point.yValue,
+  });
+
+  const setHoveredPointForRun = (
+    runSeries: (typeof interactiveSeriesForRender)[number],
+    point: {
+      xValue: number;
+      yValue: number;
+      x: number;
+      y: number;
+    },
+  ) => {
+    setHoveredPoint((current) => {
+      if (
+        current?.runId === runSeries.runId &&
+        current.xValue === point.xValue &&
+        current.yValue === point.yValue
+      ) {
+        return current;
+      }
+      return toHoveredPoint(runSeries, point);
+    });
+  };
+
+  const getClosestPointFromMouse = (
+    runSeries: (typeof interactiveSeriesForRender)[number],
+    clientX: number,
+    svgElement: SVGSVGElement | null,
+  ) => {
+    if (!svgElement || runSeries.svgPoints.length === 0) {
+      return null;
+    }
+
+    const rect = svgElement.getBoundingClientRect();
+    if (rect.width <= 0) {
+      return null;
+    }
+
+    const relativeX = ((clientX - rect.left) / rect.width) * chartWidth;
+    return runSeries.svgPoints.reduce((closest, point) =>
+      Math.abs(point.x - relativeX) < Math.abs(closest.x - relativeX)
+        ? point
+        : closest,
+    );
+  };
+
+  const getHoveredSliceFromMouse = (
+    clientX: number,
+    clientY: number,
+    svgElement: SVGSVGElement | null,
+  ): HoveredSlice | null => {
+    if (!svgElement || interactiveSeriesForRender.length === 0) {
+      return null;
+    }
+
+    const rect = svgElement.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) {
+      return null;
+    }
+
+    const relativeX = ((clientX - rect.left) / rect.width) * chartWidth;
+    const relativeY = ((clientY - rect.top) / rect.height) * chartHeight;
+    const minX = leftPadding;
+    const maxX = chartWidth - rightPadding;
+    const minY = topPadding;
+    const maxY = chartHeight - bottomPadding;
+
+    if (
+      relativeX < minX ||
+      relativeX > maxX ||
+      relativeY < minY ||
+      relativeY > maxY
+    ) {
+      return null;
+    }
+
+    const boundedX = Math.max(minX, Math.min(maxX, relativeX));
+    const xValue = xMin + ((boundedX - minX) / Math.max(plotWidth, 1)) * xDenominator;
+    const values: HoveredSliceValue[] = interactiveSeriesForRender.map(
+      (runSeries) => {
+      const nearestPoint = runSeries.svgPoints.reduce((closest, point) =>
+        Math.abs(point.xValue - xValue) < Math.abs(closest.xValue - xValue)
+          ? point
+          : closest,
+      );
+      return {
+        runId: runSeries.runId,
+        shortLabel: runSeries.shortLabel,
+        color: runSeries.color,
+        yValue: nearestPoint.yValue,
+        pointX: nearestPoint.x,
+        pointY: nearestPoint.y,
+      };
+      },
+    );
+
+    return {
+      x: boundedX,
+      xValue,
+      values,
+    };
+  };
+  const crosshairX = hoveredSlice?.x ?? displayedPoint?.x ?? null;
+  const sliceTooltipHeight = hoveredSlice
+    ? (isExpanded ? 26 : 22) +
+      hoveredSlice.values.length * sliceTooltipRowHeight +
+      2
+    : 0;
+  const throughputReferenceLineY =
+    metricId === "mbps"
+      ? Math.max(
+          topPadding,
+          Math.min(
+            chartHeight - bottomPadding,
+            chartHeight -
+              bottomPadding -
+              ((100 - yMin) / yDenominator) * plotHeight,
+          ),
+        )
+      : null;
 
   const chartSvg = (
     <svg
@@ -559,6 +958,15 @@ function MetricChart({
       className={chartClassName}
       role="img"
       aria-label={`${title} over time`}
+      onMouseMove={(event) => {
+        const nextSlice = getHoveredSliceFromMouse(
+          event.clientX,
+          event.clientY,
+          event.currentTarget,
+        );
+        setHoveredSlice(nextSlice);
+      }}
+      onMouseLeave={() => setHoveredSlice(null)}
     >
       {xTicks.map((tick) => {
         const x = leftPadding + ((tick - xMin) / xDenominator) * plotWidth;
@@ -646,7 +1054,19 @@ function MetricChart({
         stroke="currentColor"
         strokeWidth={1}
       />
-      {seriesForRender.map((runSeries) => (
+      {throughputReferenceLineY !== null ? (
+        <line
+          x1={leftPadding}
+          x2={chartWidth - rightPadding}
+          y1={throughputReferenceLineY}
+          y2={throughputReferenceLineY}
+          stroke="#334155"
+          strokeWidth={1.5}
+          opacity={0.7}
+          pointerEvents="none"
+        />
+      ) : null}
+      {interactiveSeriesForRender.map((runSeries) => (
         <g key={runSeries.runId}>
           {runSeries.svgPoints.length >= 2 ? (
             <>
@@ -657,8 +1077,66 @@ function MetricChart({
                 strokeWidth={hoverTargetStrokeWidth}
                 strokeLinecap="round"
                 pointerEvents="stroke"
-                onMouseEnter={() => setHoveredRunId(runSeries.runId)}
-                onMouseLeave={() => setHoveredRunId(null)}
+                onMouseEnter={() => {
+                  if (pinnedRunId !== null) {
+                    if (pinnedRunId === runSeries.runId) {
+                      setHoveredRunId(runSeries.runId);
+                    }
+                    return;
+                  }
+                  setHoveredRunId(runSeries.runId);
+                }}
+                onMouseMove={(event) => {
+                  if (pinnedRunId !== null) {
+                    if (pinnedRunId !== runSeries.runId) {
+                      return;
+                    }
+                    const closestPoint = getClosestPointFromMouse(
+                      runSeries,
+                      event.clientX,
+                      event.currentTarget.ownerSVGElement,
+                    );
+                    if (closestPoint) {
+                      const pinned = toHoveredPoint(runSeries, closestPoint);
+                      setPinnedPoint(pinned);
+                      setHoveredRunId(runSeries.runId);
+                      setHoveredPoint(pinned);
+                    }
+                    return;
+                  }
+                  setHoveredRunId(runSeries.runId);
+                  const closestPoint = getClosestPointFromMouse(
+                    runSeries,
+                    event.clientX,
+                    event.currentTarget.ownerSVGElement,
+                  );
+                  if (closestPoint) {
+                    setHoveredPointForRun(runSeries, closestPoint);
+                  }
+                }}
+                onMouseLeave={() => {
+                  setHoveredRunId(null);
+                  setHoveredPoint(null);
+                }}
+                onClick={(event) => {
+                  if (pinnedRunId !== null) {
+                    return;
+                  }
+                  setPinnedRunId(runSeries.runId);
+                  setHoveredRunId(runSeries.runId);
+                  const closestPoint = getClosestPointFromMouse(
+                    runSeries,
+                    event.clientX,
+                    event.currentTarget.ownerSVGElement,
+                  );
+                  if (closestPoint) {
+                    const pinned = toHoveredPoint(runSeries, closestPoint);
+                    setPinnedPoint(pinned);
+                    setHoveredPoint(pinned);
+                  } else {
+                    setPinnedPoint(null);
+                  }
+                }}
               />
               <path
                 d={runSeries.path}
@@ -666,58 +1144,273 @@ function MetricChart({
                 stroke={runSeries.color}
                 pointerEvents="none"
                 strokeWidth={
-                  hoveredRunId === runSeries.runId
-                    ? 3.8
-                    : hoveredRunId === null
-                      ? 2.2
+                  activeRunId === runSeries.runId
+                    ? runSeries.runId === THROUGHPUT_SUM_SERIES_ID
+                      ? 4.2
+                      : 3.8
+                    : activeRunId === null
+                      ? runSeries.runId === THROUGHPUT_SUM_SERIES_ID
+                        ? 2.8
+                        : 2.2
                       : 1.6
                 }
                 strokeLinecap="round"
                 opacity={
-                  hoveredRunId === null || hoveredRunId === runSeries.runId
+                  activeRunId === null || activeRunId === runSeries.runId
                     ? 1
                     : 0.28
                 }
                 style={{
                   transition: "stroke-width 140ms ease, opacity 140ms ease",
                   filter:
-                    hoveredRunId === runSeries.runId
+                    activeRunId === runSeries.runId
                       ? "drop-shadow(0 0 4px rgba(15, 23, 42, 0.24))"
                       : "none",
                 }}
               />
             </>
           ) : null}
-          {runSeries.latestPoint ? (
+          {runSeries.svgPoints.length > 0 ? (
+            <>
+              {runSeries.svgPoints.map((point, index) => (
+                <circle
+                  key={`dot-${runSeries.runId}-${point.xValue}-${index}`}
+                  cx={point.x}
+                  cy={point.y}
+                  r={pointDotRadius}
+                  fill={runSeries.color}
+                  pointerEvents="none"
+                  opacity={activeRunId === runSeries.runId ? 0.95 : 0}
+                  style={{
+                    transition: "opacity 120ms ease",
+                  }}
+                />
+              ))}
+              {runSeries.svgPoints.map((point, index) => (
+                <circle
+                  key={`hit-${runSeries.runId}-${point.xValue}-${index}`}
+                  cx={point.x}
+                  cy={point.y}
+                  r={pointHitRadius}
+                  fill="transparent"
+                  pointerEvents="all"
+                  onMouseEnter={() => {
+                    if (pinnedRunId !== null) {
+                      if (pinnedRunId === runSeries.runId) {
+                        const pinned = toHoveredPoint(runSeries, point);
+                        setPinnedPoint(pinned);
+                        setHoveredRunId(runSeries.runId);
+                        setHoveredPoint(pinned);
+                      }
+                      return;
+                    }
+                    setHoveredRunId(runSeries.runId);
+                    setHoveredPointForRun(runSeries, point);
+                  }}
+                  onMouseMove={() => {
+                    if (pinnedRunId !== null) {
+                      if (pinnedRunId === runSeries.runId) {
+                        const pinned = toHoveredPoint(runSeries, point);
+                        setPinnedPoint(pinned);
+                        setHoveredRunId(runSeries.runId);
+                        setHoveredPoint(pinned);
+                      }
+                      return;
+                    }
+                    setHoveredRunId(runSeries.runId);
+                    setHoveredPointForRun(runSeries, point);
+                  }}
+                  onMouseLeave={() => {
+                    setHoveredPoint(null);
+                  }}
+                  onClick={() => {
+                    if (pinnedRunId !== null) {
+                      return;
+                    }
+                    const pinned = toHoveredPoint(runSeries, point);
+                    setPinnedRunId(runSeries.runId);
+                    setPinnedPoint(pinned);
+                    setHoveredRunId(runSeries.runId);
+                    setHoveredPoint(pinned);
+                  }}
+                />
+              ))}
+            </>
+          ) : null}
+          {displayedPoint && displayedPoint.runId === runSeries.runId ? (
             <>
               <circle
-                cx={runSeries.latestPoint.x}
-                cy={runSeries.latestPoint.y}
+                cx={displayedPoint.x}
+                cy={displayedPoint.y}
                 r={hoverTargetPointRadius}
                 fill="transparent"
-                pointerEvents="all"
-                onMouseEnter={() => setHoveredRunId(runSeries.runId)}
-                onMouseLeave={() => setHoveredRunId(null)}
+                pointerEvents="none"
               />
               <circle
-                cx={runSeries.latestPoint.x}
-                cy={runSeries.latestPoint.y}
-                r={hoveredRunId === runSeries.runId ? 4.2 : 3.2}
+                cx={displayedPoint.x}
+                cy={displayedPoint.y}
+                r={isExpanded ? 5.2 : 4.4}
                 fill={runSeries.color}
                 pointerEvents="none"
-                opacity={
-                  hoveredRunId === null || hoveredRunId === runSeries.runId
-                    ? 1
-                    : 0.35
-                }
+                opacity={1}
                 style={{
-                  transition: "r 140ms ease, opacity 140ms ease",
+                  transition: "r 120ms ease",
                 }}
               />
             </>
           ) : null}
         </g>
       ))}
+      {crosshairX !== null ? (
+        <g pointerEvents="none">
+          <line
+            x1={crosshairX}
+            x2={crosshairX}
+            y1={topPadding}
+            y2={chartHeight - bottomPadding}
+            stroke={hoveredSlice ? "#64748b" : displayedPoint?.color ?? "#64748b"}
+            strokeWidth={1.2}
+            strokeDasharray="4 4"
+            opacity={0.55}
+          />
+          {hoveredSlice
+            ? (() => {
+                let tooltipX = crosshairX + 12;
+                if (tooltipX + sliceTooltipWidth > chartWidth - rightPadding) {
+                  tooltipX = crosshairX - sliceTooltipWidth - 12;
+                }
+                tooltipX = Math.max(
+                  leftPadding + 4,
+                  Math.min(
+                    chartWidth - rightPadding - sliceTooltipWidth - 2,
+                    tooltipX,
+                  ),
+                );
+
+                let tooltipY = topPadding + 8;
+                if (
+                  tooltipY + sliceTooltipHeight >
+                  chartHeight - bottomPadding - 4
+                ) {
+                  tooltipY = chartHeight - bottomPadding - sliceTooltipHeight - 4;
+                }
+                tooltipY = Math.max(topPadding + 4, tooltipY);
+
+                const headerY = tooltipY + (isExpanded ? 15 : 13);
+                const firstRowY = tooltipY + (isExpanded ? 30 : 25);
+
+                return (
+                  <>
+                    <rect
+                      x={tooltipX}
+                      y={tooltipY}
+                      width={sliceTooltipWidth}
+                      height={sliceTooltipHeight}
+                      rx={8}
+                      fill="rgba(255, 250, 253, 0.96)"
+                      stroke="#64748b"
+                      strokeWidth={1.2}
+                    />
+                    <text
+                      x={tooltipX + sliceTooltipPaddingX}
+                      y={headerY}
+                      className={
+                        isExpanded
+                          ? "fill-slate-900 text-[10px]"
+                          : "fill-slate-900 text-[9px]"
+                      }
+                      fontWeight={700}
+                    >
+                      x (seconds): {formatScaleValue(hoveredSlice.xValue)}
+                    </text>
+                    {hoveredSlice.values.map((value, index) => {
+                      const rowY = firstRowY + index * sliceTooltipRowHeight;
+                      return (
+                        <g
+                          key={`slice-value-${value.runId}`}
+                          transform={`translate(${tooltipX + sliceTooltipPaddingX}, ${rowY})`}
+                        >
+                          <circle cx={4} cy={-4} r={2.6} fill={value.color} />
+                          <text
+                            x={10}
+                            y={0}
+                            className={
+                              isExpanded
+                                ? "fill-slate-700 text-[10px]"
+                                : "fill-slate-700 text-[9px]"
+                            }
+                          >
+                            {value.shortLabel}: {formatScaleValue(value.yValue)} {unit}
+                          </text>
+                        </g>
+                      );
+                    })}
+                  </>
+                );
+              })()
+            : displayedPoint
+              ? (() => {
+                  let tooltipX = crosshairX + 12;
+                  if (tooltipX + tooltipWidth > chartWidth - rightPadding) {
+                    tooltipX = crosshairX - tooltipWidth - 12;
+                  }
+                  tooltipX = Math.max(
+                    leftPadding + 4,
+                    Math.min(chartWidth - rightPadding - tooltipWidth - 2, tooltipX),
+                  );
+
+                  let tooltipY = displayedPoint.y - tooltipHeight - 12;
+                  if (tooltipY < topPadding + 4) {
+                    tooltipY = displayedPoint.y + 12;
+                  }
+                  tooltipY = Math.max(
+                    topPadding + 4,
+                    Math.min(
+                      chartHeight - bottomPadding - tooltipHeight - 4,
+                      tooltipY,
+                    ),
+                  );
+
+                  return (
+                    <>
+                      <rect
+                        x={tooltipX}
+                        y={tooltipY}
+                        width={tooltipWidth}
+                        height={tooltipHeight}
+                        rx={7}
+                        fill="rgba(255, 250, 253, 0.96)"
+                        stroke={displayedPoint.color}
+                        strokeWidth={1.4}
+                      />
+                      <text
+                        x={tooltipX + 10}
+                        y={tooltipY + (isExpanded ? 15 : 14)}
+                        className={isExpanded ? "fill-slate-900 text-[10px]" : "fill-slate-900 text-[9px]"}
+                        fontWeight={700}
+                      >
+                        {displayedPoint.runSummary}
+                      </text>
+                      <text
+                        x={tooltipX + 10}
+                        y={tooltipY + (isExpanded ? 31 : 27)}
+                        className={isExpanded ? "fill-slate-700 text-[10px]" : "fill-slate-700 text-[9px]"}
+                      >
+                        y ({unit}): {formatScaleValue(displayedPoint.yValue)}
+                      </text>
+                      <text
+                        x={tooltipX + 10}
+                        y={tooltipY + (isExpanded ? 43 : 38)}
+                        className={isExpanded ? "fill-slate-700 text-[10px]" : "fill-slate-700 text-[9px]"}
+                      >
+                        x (seconds): {formatScaleValue(displayedPoint.xValue)}
+                      </text>
+                    </>
+                  );
+                })()
+              : null}
+        </g>
+      ) : null}
       <text
         x={leftPadding + plotWidth / 2}
         y={chartHeight - 4}
@@ -739,62 +1432,97 @@ function MetricChart({
   );
 
   return (
-    <article className="rounded-2xl border border-rose-200/80 bg-[#fff8fc] p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900/50">
-      <div className="flex items-center justify-between gap-3">
-        <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-          {title}
-        </h2>
-        {onExpand ? (
-          <span className="text-[11px] text-slate-500 dark:text-slate-400">
-            Click chart to enlarge
-          </span>
-        ) : null}
-      </div>
-      <div
-        className={
-          onExpand
-            ? "mt-3 cursor-zoom-in rounded-xl focus-within:ring-2 focus-within:ring-teal-300/70"
-            : "mt-3"
-        }
+    <div
+      className={cardShellClassName}
+      onMouseEnter={() => onCardHoverStart?.()}
+      onMouseLeave={() => {
+        setHoveredRunId(null);
+        setHoveredPoint(null);
+        setHoveredSlice(null);
+        onCardHoverEnd?.();
+      }}
+    >
+      <article
+        className={`${cardClassName} ${onExpand ? "cursor-zoom-in" : ""}`}
+        onClick={onExpand}
       >
-        {onExpand ? (
-          <button
-            type="button"
-            onClick={onExpand}
-            className="block w-full rounded-xl text-left outline-none"
-            aria-label={`Expand ${title} chart`}
-          >
-            {chartSvg}
-          </button>
-        ) : (
-          chartSvg
-        )}
-      </div>
-      <div className="mt-3 flex flex-wrap gap-2">
-        {seriesForRender.map((runSeries) => (
-          <div
-            key={runSeries.runId}
-            className={`group cursor-default rounded-lg border bg-[#fff3f8] px-2.5 py-1 text-[11px] text-slate-700 transition dark:bg-slate-800/40 dark:text-slate-200 ${
-              hoveredRunId === null || hoveredRunId === runSeries.runId
-                ? "border-rose-200/90 hover:-translate-y-0.5 hover:border-rose-300 hover:shadow-sm dark:border-slate-700 dark:hover:border-slate-500 dark:hover:shadow-none"
-                : "border-rose-200/70 opacity-60 dark:border-slate-700/60"
-            }`}
-            title={runSeries.label}
-            onMouseEnter={() => setHoveredRunId(runSeries.runId)}
-            onMouseLeave={() => setHoveredRunId(null)}
-          >
-            <span
-              className={`mr-1.5 inline-block h-2 w-2 rounded-full align-middle transition-transform duration-150 ${
-                hoveredRunId === runSeries.runId
-                  ? "scale-150 shadow-[0_0_0_3px_rgba(15,23,42,0.08)] dark:shadow-[0_0_0_3px_rgba(148,163,184,0.22)]"
-                  : "group-hover:scale-150 group-hover:shadow-[0_0_0_3px_rgba(15,23,42,0.08)] dark:group-hover:shadow-[0_0_0_3px_rgba(148,163,184,0.22)]"
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+            {title}
+          </h2>
+          {onExpand ? (
+            <span className="text-[11px] text-slate-500 dark:text-slate-400">
+              Click chart to enlarge
+            </span>
+          ) : null}
+        </div>
+        <div
+          className={
+            onExpand
+              ? "mt-3 cursor-zoom-in rounded-xl"
+              : "mt-3"
+          }
+        >
+          {onExpand ? (
+            <button
+              type="button"
+              onClick={onExpand}
+              className="block w-full rounded-xl text-left outline-none focus-visible:outline-none focus-visible:ring-0"
+              aria-label={`Expand ${title} chart`}
+            >
+              {chartSvg}
+            </button>
+          ) : (
+            chartSvg
+          )}
+        </div>
+        <div className="mt-3 flex flex-wrap gap-2">
+          {interactiveSeriesForRender.map((runSeries) => (
+            <div
+              key={runSeries.runId}
+              className={`group cursor-pointer rounded-lg border bg-[#fff3f8] px-2.5 py-1 text-[11px] text-slate-700 transition dark:bg-slate-800/40 dark:text-slate-200 ${
+                activeRunId === null || activeRunId === runSeries.runId
+                  ? "border-rose-200/90 hover:-translate-y-0.5 hover:border-rose-300 hover:shadow-sm dark:border-slate-700 dark:hover:border-slate-500 dark:hover:shadow-none"
+                  : "border-rose-200/70 opacity-60 dark:border-slate-700/60"
               }`}
-              style={{ backgroundColor: runSeries.color }}
-            />
-            {runSeries.shortLabel}
-          </div>
-        ))}
-      </div>
-    </article>
+              title={runSeries.label}
+              onMouseEnter={() => {
+                if (pinnedRunId !== null) {
+                  return;
+                }
+                setHoveredRunId(runSeries.runId);
+                setHoveredPoint(null);
+              }}
+              onMouseLeave={() => {
+                if (pinnedRunId !== null) {
+                  return;
+                }
+                setHoveredRunId(null);
+                setHoveredPoint(null);
+              }}
+              onClick={() => {
+                if (pinnedRunId !== null) {
+                  return;
+                }
+                setPinnedRunId(runSeries.runId);
+                setPinnedPoint(null);
+                setHoveredRunId(runSeries.runId);
+                setHoveredPoint(null);
+              }}
+            >
+              <span
+                className={`mr-1.5 inline-block h-2 w-2 rounded-full align-middle transition-transform duration-150 ${
+                  activeRunId === runSeries.runId
+                    ? "scale-150 shadow-[0_0_0_3px_rgba(15,23,42,0.08)] dark:shadow-[0_0_0_3px_rgba(148,163,184,0.22)]"
+                    : "group-hover:scale-150 group-hover:shadow-[0_0_0_3px_rgba(15,23,42,0.08)] dark:group-hover:shadow-[0_0_0_3px_rgba(148,163,184,0.22)]"
+                }`}
+                style={{ backgroundColor: runSeries.color }}
+              />
+              {runSeries.shortLabel}
+            </div>
+          ))}
+        </div>
+      </article>
+    </div>
   );
 }
