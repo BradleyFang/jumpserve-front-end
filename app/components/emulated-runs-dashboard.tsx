@@ -203,6 +203,46 @@ function buildNiceYTicks(minValue: number, maxValue: number, count = 6) {
   return { min: niceMin, max: niceMax, ticks };
 }
 
+function buildNiceXTicks(
+  minValue: number,
+  maxValue: number,
+  count = 8,
+  maxTickCount = 10,
+) {
+  if (
+    !Number.isFinite(minValue) ||
+    !Number.isFinite(maxValue) ||
+    maxValue <= minValue
+  ) {
+    return [Math.max(0, Math.round(minValue || 0))];
+  }
+
+  const rawStep = (maxValue - minValue) / Math.max(count - 1, 1);
+  let step = Math.max(1, Math.round(getNiceStep(rawStep)));
+
+  const buildTicksForStep = (stepValue: number) => {
+    const ticks: number[] = [];
+
+    for (let value = Math.ceil(minValue); value <= maxValue; value += stepValue) {
+      ticks.push(value);
+    }
+
+    if (ticks[ticks.length - 1] !== maxValue) {
+      ticks.push(maxValue);
+    }
+
+    return ticks;
+  };
+
+  let ticks = buildTicksForStep(step);
+  while (ticks.length > maxTickCount) {
+    step += 1;
+    ticks = buildTicksForStep(step);
+  }
+
+  return ticks;
+}
+
 export function EmulatedRunsDashboard({
   parentRuns,
   runs,
@@ -685,7 +725,8 @@ function MetricChart({
   );
 
   const xMin = 0;
-  const xMax = Math.max(...xValues, 0);
+  const xMaxData = Math.max(...xValues, 0);
+  const xMax = Math.ceil(xMaxData);
   const yMinRaw = Math.min(...yValues);
   const yMaxRaw = Math.max(...yValues);
   const yPadding = Math.max((yMaxRaw - yMinRaw) * 0.12, 0.001);
@@ -706,15 +747,7 @@ function MetricChart({
   const yMin = yScale.min;
   const yMax = yScale.max;
   const yTicks = yScale.ticks;
-  const xTickStart = Math.ceil(xMin);
-  const xTickEnd = Math.floor(xMax);
-  const xTicks =
-    xTickStart <= xTickEnd
-      ? Array.from(
-          { length: xTickEnd - xTickStart + 1 },
-          (_, index) => xTickStart + index,
-        )
-      : [Math.round(xMin)];
+  const xTicks = buildNiceXTicks(xMin, xMax);
   const xDenominator = xMax === xMin ? 1 : xMax - xMin;
   const yDenominator = yMax === yMin ? 1 : yMax - yMin;
 
