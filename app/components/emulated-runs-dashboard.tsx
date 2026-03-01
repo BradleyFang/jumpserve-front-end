@@ -630,6 +630,7 @@ function MetricChart({
   const [pinnedRunId, setPinnedRunId] = useState<number | null>(null);
   const [pinnedPoint, setPinnedPoint] = useState<HoveredChartPoint | null>(null);
   const isExpanded = size === "expanded";
+  const areInlineChartInteractionsEnabled = isExpanded;
   const chartWidth = isExpanded ? 1200 : 460;
   const chartHeight = isExpanded ? 620 : 220;
   const leftPadding = isExpanded ? 78 : 56;
@@ -992,6 +993,9 @@ function MetricChart({
       role="img"
       aria-label={`${title} over time`}
       onMouseMove={(event) => {
+        if (!areInlineChartInteractionsEnabled) {
+          return;
+        }
         const nextSlice = getHoveredSliceFromMouse(
           event.clientX,
           event.clientY,
@@ -999,7 +1003,12 @@ function MetricChart({
         );
         setHoveredSlice(nextSlice);
       }}
-      onMouseLeave={() => setHoveredSlice(null)}
+      onMouseLeave={() => {
+        if (!areInlineChartInteractionsEnabled) {
+          return;
+        }
+        setHoveredSlice(null);
+      }}
     >
       {xTicks.map((tick) => {
         const x = leftPadding + ((tick - xMin) / xDenominator) * plotWidth;
@@ -1109,8 +1118,11 @@ function MetricChart({
                 stroke="transparent"
                 strokeWidth={hoverTargetStrokeWidth}
                 strokeLinecap="round"
-                pointerEvents="stroke"
+                pointerEvents={areInlineChartInteractionsEnabled ? "stroke" : "none"}
                 onMouseEnter={() => {
+                  if (!areInlineChartInteractionsEnabled) {
+                    return;
+                  }
                   if (pinnedRunId !== null) {
                     if (pinnedRunId === runSeries.runId) {
                       setHoveredRunId(runSeries.runId);
@@ -1120,6 +1132,9 @@ function MetricChart({
                   setHoveredRunId(runSeries.runId);
                 }}
                 onMouseMove={(event) => {
+                  if (!areInlineChartInteractionsEnabled) {
+                    return;
+                  }
                   if (pinnedRunId !== null) {
                     if (pinnedRunId !== runSeries.runId) {
                       return;
@@ -1148,10 +1163,16 @@ function MetricChart({
                   }
                 }}
                 onMouseLeave={() => {
+                  if (!areInlineChartInteractionsEnabled) {
+                    return;
+                  }
                   setHoveredRunId(null);
                   setHoveredPoint(null);
                 }}
                 onClick={(event) => {
+                  if (!areInlineChartInteractionsEnabled) {
+                    return;
+                  }
                   if (pinnedRunId !== null) {
                     return;
                   }
@@ -1226,8 +1247,11 @@ function MetricChart({
                   cy={point.y}
                   r={pointHitRadius}
                   fill="transparent"
-                  pointerEvents="all"
+                  pointerEvents={areInlineChartInteractionsEnabled ? "all" : "none"}
                   onMouseEnter={() => {
+                    if (!areInlineChartInteractionsEnabled) {
+                      return;
+                    }
                     if (pinnedRunId !== null) {
                       if (pinnedRunId === runSeries.runId) {
                         const pinned = toHoveredPoint(runSeries, point);
@@ -1241,6 +1265,9 @@ function MetricChart({
                     setHoveredPointForRun(runSeries, point);
                   }}
                   onMouseMove={() => {
+                    if (!areInlineChartInteractionsEnabled) {
+                      return;
+                    }
                     if (pinnedRunId !== null) {
                       if (pinnedRunId === runSeries.runId) {
                         const pinned = toHoveredPoint(runSeries, point);
@@ -1254,9 +1281,15 @@ function MetricChart({
                     setHoveredPointForRun(runSeries, point);
                   }}
                   onMouseLeave={() => {
+                    if (!areInlineChartInteractionsEnabled) {
+                      return;
+                    }
                     setHoveredPoint(null);
                   }}
                   onClick={() => {
+                    if (!areInlineChartInteractionsEnabled) {
+                      return;
+                    }
                     if (pinnedRunId !== null) {
                       return;
                     }
@@ -1294,7 +1327,7 @@ function MetricChart({
           ) : null}
         </g>
       ))}
-      {crosshairX !== null ? (
+      {areInlineChartInteractionsEnabled && crosshairX !== null ? (
         <g pointerEvents="none">
           <line
             x1={crosshairX}
