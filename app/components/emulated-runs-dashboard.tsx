@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 
 export type EmulatedParentRun = {
   id: number;
@@ -159,6 +160,10 @@ function formatScaleValue(value: number) {
   return trimTrailingZeros(value.toFixed(3));
 }
 
+function formatSecondsValue(value: number) {
+  return value.toFixed(1);
+}
+
 function getNiceStep(rawStep: number) {
   if (!Number.isFinite(rawStep) || rawStep <= 0) {
     return 1;
@@ -247,18 +252,32 @@ export function EmulatedRunsDashboard({
   parentRuns,
   runs,
   stats,
+  initialSelectedParentRunId = null,
+  useParentRunRoute = false,
 }: {
   parentRuns: EmulatedParentRun[];
   runs: EmulatedRun[];
   stats: EmulatedPerSecondStat[];
+  initialSelectedParentRunId?: number | null;
+  useParentRunRoute?: boolean;
 }) {
+  const router = useRouter();
+  const defaultSelectedParentRunId =
+    initialSelectedParentRunId !== null &&
+    parentRuns.some((parentRun) => parentRun.id === initialSelectedParentRunId)
+      ? initialSelectedParentRunId
+      : (parentRuns[0]?.id ?? null);
   const [selectedParentRunId, setSelectedParentRunId] = useState<number | null>(
-    parentRuns[0]?.id ?? null,
+    defaultSelectedParentRunId,
   );
   const [isParentMenuOpen, setIsParentMenuOpen] = useState(false);
   const [expandedMetricId, setExpandedMetricId] = useState<string | null>(null);
   const [hoveredMetricId, setHoveredMetricId] = useState<string | null>(null);
   const parentMenuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    setSelectedParentRunId(defaultSelectedParentRunId);
+  }, [defaultSelectedParentRunId]);
 
   const runsByParent = useMemo(() => {
     const grouped = new Map<number, EmulatedRun[]>();
@@ -469,7 +488,11 @@ export function EmulatedRunsDashboard({
                           : "border-transparent hover:border-rose-200 hover:bg-rose-50/45 dark:hover:border-slate-600 dark:hover:bg-slate-800/45"
                       }`}
                       onClick={() => {
-                        setSelectedParentRunId(parentRun.id);
+                        if (useParentRunRoute) {
+                          router.push(`/parent-run/${parentRun.id}`);
+                        } else {
+                          setSelectedParentRunId(parentRun.id);
+                        }
                         setIsParentMenuOpen(false);
                       }}
                     >
@@ -627,6 +650,7 @@ function MetricChart({
     null,
   );
   const [hoveredSlice, setHoveredSlice] = useState<HoveredSlice | null>(null);
+  const [hoveredCursorX, setHoveredCursorX] = useState<number | null>(null);
   const [pinnedRunId, setPinnedRunId] = useState<number | null>(null);
   const [pinnedPoint, setPinnedPoint] = useState<HoveredChartPoint | null>(null);
   const isExpanded = size === "expanded";
@@ -704,7 +728,7 @@ function MetricChart({
         }}
       >
         <article
-          className={`${cardClassName} ${onExpand ? "cursor-zoom-in" : ""}`}
+          className={`${cardClassName} ${onExpand ? "cursor-pointer" : ""}`}
           onClick={onExpand}
         >
           <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
@@ -840,10 +864,11 @@ function MetricChart({
   const axisLabelTextClass = isExpanded
     ? "fill-slate-500 text-[12px] dark:fill-slate-400"
     : "fill-slate-500 text-[10px] dark:fill-slate-400";
+  const hoverActivationRadius = 10;
   const hoverTargetStrokeWidth = isExpanded ? 24 : 18;
   const hoverTargetPointRadius = isExpanded ? 14 : 10;
   const pointDotRadius = isExpanded ? 2.8 : 2.2;
-  const pointHitRadius = isExpanded ? 9 : 6;
+  const pointHitRadius = hoverActivationRadius;
   const tooltipWidth = isExpanded ? 140 : 116;
   const tooltipHeight = isExpanded ? 50 : 44;
   const sliceTooltipWidth = isExpanded ? 260 : 220;
@@ -892,23 +917,95 @@ function MetricChart({
   const getClosestPointFromMouse = (
     runSeries: (typeof interactiveSeriesForRender)[number],
     clientX: number,
+    clientY: number,
     svgElement: SVGSVGElement | null,
   ) => {
-    if (!svgElement || runSeries.svgPoints.length === 0) {
+    if (runSeries.svgPoints.length === 0) {
       return null;
     }
 
-    const rect = svgElement.getBoundingClientRect();
-    if (rect.width <= 0) {
+    const position = getSvgPositionFromMouse(clientX, clientY, svgElement);
+    if (!position) {
       return null;
     }
 
-    const relativeX = ((clientX - rect.left) / rect.width) * chartWidth;
+    const relativeX = position.x;
     return runSeries.svgPoints.reduce((closest, point) =>
       Math.abs(point.x - relativeX) < Math.abs(closest.x - relativeX)
         ? point
         : closest,
     );
+  };
+
+  const getSvgPositionFromMouse = (
+    clientX: number,
+    clientY: number,
+    svgElement: SVGSVGElement | null,
+  ) => {
+    if (!svgElement) {
+      return null;
+    }
+
+    const ctm = svgElement.getScreenCTM();
+    if (!ctm) {
+      return null;
+    }
+
+    const svgPoint = svgElement.createSVGPoint();
+    svgPoint.x = clientX;
+    svgPoint.y = clientY;
+
+    const transformedPoint = svgPoint.matrixTransform(ctm.inverse());
+    if (
+      !Number.isFinite(transformedPoint.x) ||
+      !Number.isFinite(transformedPoint.y)
+    ) {
+      return null;
+    }
+
+    if (
+      transformedPoint.x < 0 ||
+      transformedPoint.x > chartWidth ||
+      transformedPoint.y < 0 ||
+      transformedPoint.y > chartHeight
+    ) {
+      return null;
+    }
+
+    return {
+      x: transformedPoint.x,
+      y: transformedPoint.y,
+    };
+  };
+
+  const getBoundedPlotPositionFromMouse = (
+    clientX: number,
+    clientY: number,
+    svgElement: SVGSVGElement | null,
+  ) => {
+    const position = getSvgPositionFromMouse(clientX, clientY, svgElement);
+    if (!position) {
+      return null;
+    }
+
+    const minX = leftPadding;
+    const maxX = chartWidth - rightPadding;
+    const minY = topPadding;
+    const maxY = chartHeight - bottomPadding;
+
+    if (
+      position.x < minX ||
+      position.x > maxX ||
+      position.y < minY ||
+      position.y > maxY
+    ) {
+      return null;
+    }
+
+    return {
+      x: Math.max(minX, Math.min(maxX, position.x)),
+      y: Math.max(minY, Math.min(maxY, position.y)),
+    };
   };
 
   const getHoveredSliceFromMouse = (
@@ -920,28 +1017,17 @@ function MetricChart({
       return null;
     }
 
-    const rect = svgElement.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) {
+    const boundedPosition = getBoundedPlotPositionFromMouse(
+      clientX,
+      clientY,
+      svgElement,
+    );
+    if (!boundedPosition) {
       return null;
     }
 
-    const relativeX = ((clientX - rect.left) / rect.width) * chartWidth;
-    const relativeY = ((clientY - rect.top) / rect.height) * chartHeight;
+    const boundedX = boundedPosition.x;
     const minX = leftPadding;
-    const maxX = chartWidth - rightPadding;
-    const minY = topPadding;
-    const maxY = chartHeight - bottomPadding;
-
-    if (
-      relativeX < minX ||
-      relativeX > maxX ||
-      relativeY < minY ||
-      relativeY > maxY
-    ) {
-      return null;
-    }
-
-    const boundedX = Math.max(minX, Math.min(maxX, relativeX));
     const xValue = xMin + ((boundedX - minX) / Math.max(plotWidth, 1)) * xDenominator;
     const values: HoveredSliceValue[] = interactiveSeriesForRender.map(
       (runSeries) => {
@@ -967,7 +1053,7 @@ function MetricChart({
       values,
     };
   };
-  const crosshairX = hoveredSlice?.x ?? displayedPoint?.x ?? null;
+  const crosshairX = hoveredSlice?.x ?? displayedPoint?.x ?? hoveredCursorX ?? null;
   const sliceTooltipHeight = hoveredSlice
     ? (isExpanded ? 26 : 22) +
       hoveredSlice.values.length * sliceTooltipRowHeight +
@@ -996,6 +1082,17 @@ function MetricChart({
         if (!areInlineChartInteractionsEnabled) {
           return;
         }
+        const boundedPosition = getBoundedPlotPositionFromMouse(
+          event.clientX,
+          event.clientY,
+          event.currentTarget,
+        );
+        if (!boundedPosition) {
+          setHoveredSlice(null);
+          setHoveredCursorX(null);
+          return;
+        }
+        setHoveredCursorX(boundedPosition.x);
         const nextSlice = getHoveredSliceFromMouse(
           event.clientX,
           event.clientY,
@@ -1008,6 +1105,7 @@ function MetricChart({
           return;
         }
         setHoveredSlice(null);
+        setHoveredCursorX(null);
       }}
     >
       {xTicks.map((tick) => {
@@ -1118,7 +1216,7 @@ function MetricChart({
                 stroke="transparent"
                 strokeWidth={hoverTargetStrokeWidth}
                 strokeLinecap="round"
-                pointerEvents={areInlineChartInteractionsEnabled ? "stroke" : "none"}
+                pointerEvents="none"
                 onMouseEnter={() => {
                   if (!areInlineChartInteractionsEnabled) {
                     return;
@@ -1142,6 +1240,7 @@ function MetricChart({
                     const closestPoint = getClosestPointFromMouse(
                       runSeries,
                       event.clientX,
+                      event.clientY,
                       event.currentTarget.ownerSVGElement,
                     );
                     if (closestPoint) {
@@ -1156,6 +1255,7 @@ function MetricChart({
                   const closestPoint = getClosestPointFromMouse(
                     runSeries,
                     event.clientX,
+                    event.clientY,
                     event.currentTarget.ownerSVGElement,
                   );
                   if (closestPoint) {
@@ -1181,6 +1281,7 @@ function MetricChart({
                   const closestPoint = getClosestPointFromMouse(
                     runSeries,
                     event.clientX,
+                    event.clientY,
                     event.currentTarget.ownerSVGElement,
                   );
                   if (closestPoint) {
@@ -1284,6 +1385,7 @@ function MetricChart({
                     if (!areInlineChartInteractionsEnabled) {
                       return;
                     }
+                    setHoveredRunId(null);
                     setHoveredPoint(null);
                   }}
                   onClick={() => {
@@ -1387,7 +1489,7 @@ function MetricChart({
                       }
                       fontWeight={700}
                     >
-                      x (seconds): {formatScaleValue(hoveredSlice.xValue)}
+                      x (seconds): {formatSecondsValue(hoveredSlice.xValue)}
                     </text>
                     {hoveredSlice.values.map((value, index) => {
                       const rowY = firstRowY + index * sliceTooltipRowHeight;
@@ -1469,7 +1571,7 @@ function MetricChart({
                         y={tooltipY + (isExpanded ? 43 : 38)}
                         className={isExpanded ? "fill-slate-700 text-[10px]" : "fill-slate-700 text-[9px]"}
                       >
-                        x (seconds): {formatScaleValue(displayedPoint.xValue)}
+                        x (seconds): {formatSecondsValue(displayedPoint.xValue)}
                       </text>
                     </>
                   );
@@ -1508,10 +1610,10 @@ function MetricChart({
         onCardHoverEnd?.();
       }}
     >
-      <article
-        className={`${cardClassName} ${onExpand ? "cursor-zoom-in" : ""}`}
-        onClick={onExpand}
-      >
+        <article
+          className={`${cardClassName} ${onExpand ? "cursor-pointer" : ""}`}
+          onClick={onExpand}
+        >
         <div className="flex items-center justify-between gap-3">
           <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
             {title}
@@ -1525,7 +1627,7 @@ function MetricChart({
         <div
           className={
             onExpand
-              ? "mt-3 cursor-zoom-in rounded-xl"
+              ? "mt-3 rounded-xl"
               : "mt-3"
           }
         >
@@ -1533,7 +1635,7 @@ function MetricChart({
             <button
               type="button"
               onClick={onExpand}
-              className="block w-full rounded-xl text-left outline-none focus-visible:outline-none focus-visible:ring-0"
+              className="block w-full cursor-pointer rounded-xl text-left outline-none focus-visible:outline-none focus-visible:ring-0"
               aria-label={`Expand ${title} chart`}
             >
               {chartSvg}
