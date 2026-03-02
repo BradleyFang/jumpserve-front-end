@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 
 export type EmulatedParentRun = {
   id: number;
@@ -123,22 +123,6 @@ function formatClientSummary(run: EmulatedRun | null) {
   return `${ccaLabel}, ${delayLabel}`;
 }
 
-function formatClientDropdownSummary(run: EmulatedRun | null) {
-  if (!run) {
-    return "n/a";
-  }
-
-  const ccaLabel =
-    run.congestionControlAlgorithmName ??
-    (run.congestionControlAlgorithmId !== null
-      ? `id ${run.congestionControlAlgorithmId}`
-      : "n/a");
-  const delayLabel =
-    run.delayAddedMs !== null ? `${run.delayAddedMs}ms` : "n/a";
-
-  return `${ccaLabel} ${delayLabel}`;
-}
-
 function trimTrailingZeros(value: string) {
   if (!value.includes(".")) {
     return value;
@@ -253,31 +237,20 @@ export function EmulatedRunsDashboard({
   runs,
   stats,
   initialSelectedParentRunId = null,
-  useParentRunRoute = false,
 }: {
   parentRuns: EmulatedParentRun[];
   runs: EmulatedRun[];
   stats: EmulatedPerSecondStat[];
   initialSelectedParentRunId?: number | null;
-  useParentRunRoute?: boolean;
 }) {
-  const router = useRouter();
   const defaultSelectedParentRunId =
     initialSelectedParentRunId !== null &&
     parentRuns.some((parentRun) => parentRun.id === initialSelectedParentRunId)
       ? initialSelectedParentRunId
       : (parentRuns[0]?.id ?? null);
-  const [selectedParentRunId, setSelectedParentRunId] = useState<number | null>(
-    defaultSelectedParentRunId,
-  );
-  const [isParentMenuOpen, setIsParentMenuOpen] = useState(false);
+  const selectedParentRunId = defaultSelectedParentRunId;
   const [expandedMetricId, setExpandedMetricId] = useState<string | null>(null);
   const [hoveredMetricId, setHoveredMetricId] = useState<string | null>(null);
-  const parentMenuRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    setSelectedParentRunId(defaultSelectedParentRunId);
-  }, [defaultSelectedParentRunId]);
 
   const runsByParent = useMemo(() => {
     const grouped = new Map<number, EmulatedRun[]>();
@@ -330,31 +303,8 @@ export function EmulatedRunsDashboard({
     return grouped;
   }, [stats]);
 
-  const parentOptions = useMemo(
-    () =>
-      parentRuns.map((parentRun) => {
-        const childRuns = runsByParent.get(parentRun.id) ?? [];
-        const client1Run =
-          childRuns.find((run) => run.clientNumber === 1) ?? null;
-        const client2Run =
-          childRuns.find((run) => run.clientNumber === 2) ?? null;
-
-        return {
-          ...parentRun,
-          childRunCount: childRuns.length,
-          client1Summary: formatClientDropdownSummary(client1Run),
-          client2Summary: formatClientDropdownSummary(client2Run),
-        };
-      }),
-    [parentRuns, runsByParent],
-  );
-
   const selectedParentRun =
-    parentOptions.find((parentRun) => parentRun.id === selectedParentRunId) ??
-    null;
-  const selectedParentLabel = selectedParentRun
-    ? `Parent #${selectedParentRun.id}: ${selectedParentRun.client1Summary} | ${selectedParentRun.client2Summary}`
-    : "Select parent run";
+    parentRuns.find((parentRun) => parentRun.id === selectedParentRunId) ?? null;
   const selectedRuns = selectedParentRunId
     ? (runsByParent.get(selectedParentRunId) ?? [])
     : [];
@@ -365,19 +315,18 @@ export function EmulatedRunsDashboard({
       (run.congestionControlAlgorithmId !== null
         ? `id ${run.congestionControlAlgorithmId}`
         : "n/a");
+    const delayLabel = run.delayAddedMs !== null ? `${run.delayAddedMs}ms` : "n/a";
+    const legendLabel = `${ccaLabel} ${delayLabel}`;
 
     return {
       runId: run.id,
-      shortLabel: ccaLabel,
-      label: ccaLabel,
+      shortLabel: legendLabel,
+      label: legendLabel,
       clientSummary: formatClientSummary(run),
       color: SERIES_COLORS[index % SERIES_COLORS.length],
       data: statsByRun.get(run.id) ?? [],
     };
   });
-
-  const client1Run = selectedRuns.find((run) => run.clientNumber === 1) ?? null;
-  const client2Run = selectedRuns.find((run) => run.clientNumber === 2) ?? null;
 
   const totalSampleCount = chartSeries.reduce(
     (total, series) => total + series.data.length,
@@ -403,37 +352,12 @@ export function EmulatedRunsDashboard({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [expandedMetric]);
 
-  useEffect(() => {
-    if (!isParentMenuOpen) {
-      return;
-    }
-
-    const onPointerDown = (event: PointerEvent) => {
-      if (parentMenuRef.current?.contains(event.target as Node)) {
-        return;
-      }
-      setIsParentMenuOpen(false);
-    };
-
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setIsParentMenuOpen(false);
-      }
-    };
-
-    window.addEventListener("pointerdown", onPointerDown);
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      window.removeEventListener("pointerdown", onPointerDown);
-      window.removeEventListener("keydown", onKeyDown);
-    };
-  }, [isParentMenuOpen]);
-
   return (
     <>
-      <section className="w-full max-w-6xl rounded-3xl border border-rose-200/70 bg-[#fff8fc]/95 p-6 shadow-2xl backdrop-blur-sm dark:border-slate-700/70 dark:bg-slate-900/80 sm:p-8">
-      <div className="mb-8 flex flex-col gap-4 border-b border-rose-200/80 pb-6 dark:border-slate-700 sm:flex-row sm:items-end sm:justify-between">
-        <div>
+      <section className="w-full max-w-6xl rounded-3xl border border-rose-200/70 bg-[#fff8fc]/95 p-6 shadow-2xl backdrop-blur-sm dark:border-slate-600/70 dark:bg-slate-800/78 sm:p-8">
+      <div className="mb-8 border-b border-rose-200/80 pb-6 dark:border-slate-600">
+        <div className="flex items-start justify-between gap-4">
+          <div>
           <p className="text-xs font-semibold uppercase tracking-[0.28em] text-teal-700">
             Jumpserve
           </p>
@@ -441,85 +365,34 @@ export function EmulatedRunsDashboard({
             Emulated Run Explorer
           </h1>
           <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
-            Select a parent run and compare all child <code>emulated_runs</code>{" "}
+            Compare all child <code>emulated_runs</code>{" "}
             on shared charts from <code>emulated_per_second_stats</code>.
           </p>
-        </div>
-        <label className="flex w-full flex-col gap-2 text-sm font-medium text-slate-700 dark:text-slate-200 sm:max-w-md">
-          Select parent run
-          <div className="relative" ref={parentMenuRef}>
-            <button
-              type="button"
-              className={`flex w-full items-center justify-between gap-3 rounded-2xl border px-3 py-2.5 text-left text-sm shadow-sm outline-none transition ${
-                isParentMenuOpen
-                  ? "border-rose-400 bg-white shadow-md dark:border-slate-500 dark:bg-slate-900 dark:shadow-none"
-                  : "border-rose-300/80 bg-[#fff5fb] hover:border-rose-300 dark:border-slate-600 dark:bg-slate-950"
-              } focus:border-teal-500 focus:ring-2 focus:ring-teal-200 dark:text-slate-100 dark:focus:ring-teal-700/60`}
-              aria-haspopup="listbox"
-              aria-expanded={isParentMenuOpen}
-              onClick={() => setIsParentMenuOpen((current) => !current)}
-            >
-              <span className="truncate">{selectedParentLabel}</span>
-              <svg
-                viewBox="0 0 20 20"
-                className={`h-4 w-4 shrink-0 text-slate-500 transition-transform dark:text-slate-400 ${
-                  isParentMenuOpen ? "rotate-180" : ""
-                }`}
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.8"
-              >
-                <path d="M5.5 7.5 10 12l4.5-4.5" strokeLinecap="round" />
-              </svg>
-            </button>
-            {isParentMenuOpen ? (
-              <div className="absolute z-20 mt-2 max-h-72 w-full overflow-y-auto rounded-2xl border border-rose-200/90 bg-white p-1.5 shadow-xl dark:border-slate-700 dark:bg-slate-900">
-                {parentOptions.map((parentRun) => {
-                  const isSelected = selectedParentRunId === parentRun.id;
-                  return (
-                    <button
-                      key={parentRun.id}
-                      type="button"
-                      role="option"
-                      aria-selected={isSelected}
-                      className={`mb-1 w-full rounded-xl border px-3 py-2 text-left transition last:mb-0 ${
-                        isSelected
-                          ? "border-rose-300 bg-rose-50/70 shadow-sm dark:border-slate-500 dark:bg-slate-800/70"
-                          : "border-transparent hover:border-rose-200 hover:bg-rose-50/45 dark:hover:border-slate-600 dark:hover:bg-slate-800/45"
-                      }`}
-                      onClick={() => {
-                        if (useParentRunRoute) {
-                          router.push(`/parent-run/${parentRun.id}`);
-                        } else {
-                          setSelectedParentRunId(parentRun.id);
-                        }
-                        setIsParentMenuOpen(false);
-                      }}
-                    >
-                      <span className="block text-xs uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
-                        Parent #{parentRun.id}
-                      </span>
-                      <span className="mt-0.5 block text-sm text-slate-800 dark:text-slate-100">
-                        {parentRun.client1Summary} | {parentRun.client2Summary}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            ) : null}
           </div>
-        </label>
+          <Link
+            href="/"
+            aria-label="Go to home"
+            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-rose-300/80 bg-[#fff5fb] text-slate-700 shadow-sm transition hover:border-rose-400 hover:bg-rose-50 dark:border-slate-500 dark:bg-slate-800/85 dark:text-slate-100 dark:hover:border-slate-400 dark:hover:bg-slate-700/90"
+          >
+            <svg
+              viewBox="0 0 24 24"
+              className="h-5 w-5"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.9"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M3 10.5 12 3l9 7.5" />
+              <path d="M6 10v10h12V10" />
+              <path d="M10 20v-6h4v6" />
+            </svg>
+          </Link>
+        </div>
       </div>
 
       {selectedParentRun ? (
         <>
-          <dl className="mb-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <MetaItem label="Parent Run ID" value={String(selectedParentRun.id)} />
-            <MetaItem label="Child Runs" value={String(selectedRuns.length)} />
-            <MetaItem label="Client 1" value={formatClientSummary(client1Run)} />
-            <MetaItem label="Client 2" value={formatClientSummary(client2Run)} />
-          </dl>
-
           {selectedRuns.length > 0 ? (
             <>
               <p className="mb-3 text-xs uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
@@ -569,7 +442,7 @@ export function EmulatedRunsDashboard({
           onClick={() => setExpandedMetricId(null)}
         >
           <div
-            className="max-h-[95vh] w-full max-w-7xl overflow-y-auto rounded-2xl border border-slate-700/70 bg-slate-900/95 p-3 shadow-2xl sm:p-4"
+            className="max-h-[95vh] w-full max-w-7xl overflow-y-auto rounded-2xl border border-slate-600/70 bg-slate-800/92 p-3 shadow-2xl sm:p-4"
             onClick={(event) => event.stopPropagation()}
           >
             <div className="mb-3 flex items-center justify-between px-1">
@@ -579,7 +452,7 @@ export function EmulatedRunsDashboard({
               <button
                 type="button"
                 onClick={() => setExpandedMetricId(null)}
-                className="rounded-lg border border-slate-600 bg-slate-800 px-3 py-1.5 text-xs font-medium text-slate-100 hover:bg-slate-700"
+                className="rounded-lg border border-slate-500 bg-slate-700/90 px-3 py-1.5 text-xs font-medium text-slate-100 hover:bg-slate-600"
               >
                 Close
               </button>
@@ -599,22 +472,9 @@ export function EmulatedRunsDashboard({
   );
 }
 
-function MetaItem({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-2xl border border-rose-200/80 bg-[#fff3f8] p-4 dark:border-slate-700 dark:bg-slate-800/40">
-      <dt className="text-xs uppercase tracking-[0.2em] text-slate-500 dark:text-slate-400">
-        {label}
-      </dt>
-      <dd className="mt-1 text-lg font-semibold text-slate-900 dark:text-slate-100">
-        {value}
-      </dd>
-    </div>
-  );
-}
-
 function EmptyState({ text }: { text: string }) {
   return (
-    <div className="rounded-2xl border border-dashed border-rose-300/80 bg-[#fff3f8] p-8 text-center text-sm text-slate-600 dark:border-slate-600 dark:bg-slate-800/40 dark:text-slate-300">
+    <div className="rounded-2xl border border-dashed border-rose-300/80 bg-[#fff3f8] p-8 text-center text-sm text-slate-600 dark:border-slate-500 dark:bg-slate-700/45 dark:text-slate-200">
       {text}
     </div>
   );
@@ -666,10 +526,10 @@ function MetricChart({
   const cardShellClassName = `transition-opacity duration-[400ms] ${
     isDimmed ? "opacity-65" : "opacity-100"
   }`;
-  const cardClassName = `rounded-2xl border border-rose-200/80 bg-[#fff8fc] p-4 shadow-sm transition-[border-color,box-shadow,transform] duration-[400ms] will-change-transform dark:border-slate-700 dark:bg-slate-900/50 ${
+  const cardClassName = `rounded-2xl border border-rose-200/80 bg-[#fff8fc] p-4 shadow-sm transition-[border-color,box-shadow,transform] duration-[400ms] will-change-transform dark:border-slate-600 dark:bg-slate-800/55 ${
     isDimmed
       ? ""
-      : `${isActive ? "-translate-y-3 scale-[1.02] border-rose-500 shadow-2xl dark:border-slate-500 dark:shadow-none" : ""} focus-within:-translate-y-3 focus-within:scale-[1.02] focus-within:border-rose-500 focus-within:shadow-2xl dark:focus-within:border-slate-500 dark:focus-within:shadow-none`
+      : `${isActive ? "-translate-y-3 scale-[1.02] border-rose-500 shadow-2xl dark:border-slate-400 dark:shadow-none" : ""} focus-within:-translate-y-3 focus-within:scale-[1.02] focus-within:border-rose-500 focus-within:shadow-2xl dark:focus-within:border-slate-400 dark:focus-within:shadow-none`
   }`;
   const activeRunId = pinnedRunId ?? hoveredRunId;
   const displayedPoint = pinnedPoint ?? hoveredPoint;
@@ -856,8 +716,8 @@ function MetricChart({
     : seriesForRender;
 
   const chartClassName = isExpanded
-    ? "h-[70vh] w-full overflow-visible rounded-xl bg-[#fff2f8] text-slate-300 dark:bg-slate-950/70 dark:text-slate-700"
-    : "h-44 w-full overflow-visible rounded-xl bg-[#fff2f8] text-slate-300 dark:bg-slate-950/70 dark:text-slate-700";
+    ? "h-[70vh] w-full overflow-visible rounded-xl bg-[#fff2f8] text-slate-300 dark:bg-slate-900/65 dark:text-slate-600"
+    : "h-44 w-full overflow-visible rounded-xl bg-[#fff2f8] text-slate-300 dark:bg-slate-900/65 dark:text-slate-600";
   const axisTickTextClass = isExpanded
     ? "fill-slate-500 text-[11px] dark:fill-slate-400"
     : "fill-slate-500 text-[9px] dark:fill-slate-400";
@@ -1059,18 +919,6 @@ function MetricChart({
       hoveredSlice.values.length * sliceTooltipRowHeight +
       2
     : 0;
-  const throughputReferenceLineY =
-    metricId === "mbps"
-      ? Math.max(
-          topPadding,
-          Math.min(
-            chartHeight - bottomPadding,
-            chartHeight -
-              bottomPadding -
-              ((100 - yMin) / yDenominator) * plotHeight,
-          ),
-        )
-      : null;
 
   const chartSvg = (
     <svg
@@ -1194,18 +1042,6 @@ function MetricChart({
         stroke="currentColor"
         strokeWidth={1}
       />
-      {throughputReferenceLineY !== null ? (
-        <line
-          x1={leftPadding}
-          x2={chartWidth - rightPadding}
-          y1={throughputReferenceLineY}
-          y2={throughputReferenceLineY}
-          stroke="#334155"
-          strokeWidth={1.5}
-          opacity={0.7}
-          pointerEvents="none"
-        />
-      ) : null}
       {interactiveSeriesForRender.map((runSeries) => (
         <g key={runSeries.runId}>
           {runSeries.svgPoints.length >= 2 ? (
@@ -1648,10 +1484,10 @@ function MetricChart({
           {interactiveSeriesForRender.map((runSeries) => (
             <div
               key={runSeries.runId}
-              className={`group cursor-pointer rounded-lg border bg-[#fff3f8] px-2.5 py-1 text-[11px] text-slate-700 transition dark:bg-slate-800/40 dark:text-slate-200 ${
+              className={`group cursor-pointer rounded-lg border bg-[#fff3f8] px-2.5 py-1 text-[11px] text-slate-700 transition dark:bg-slate-700/45 dark:text-slate-100 ${
                 activeRunId === null || activeRunId === runSeries.runId
-                  ? "border-rose-200/90 hover:-translate-y-0.5 hover:border-rose-300 hover:shadow-sm dark:border-slate-700 dark:hover:border-slate-500 dark:hover:shadow-none"
-                  : "border-rose-200/70 opacity-60 dark:border-slate-700/60"
+                  ? "border-rose-200/90 hover:-translate-y-0.5 hover:border-rose-300 hover:shadow-sm dark:border-slate-600 dark:hover:border-slate-400 dark:hover:shadow-none"
+                  : "border-rose-200/70 opacity-60 dark:border-slate-600/60"
               }`}
               title={runSeries.label}
               onMouseEnter={() => {
