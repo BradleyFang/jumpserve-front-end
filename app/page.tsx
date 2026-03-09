@@ -5,8 +5,8 @@ export default async function Home() {
   const parentRuns = await fetchParentRunsForIndex();
 
   return (
-    <main className="space-atmosphere relative box-border h-dvh overflow-hidden p-4 sm:p-6">
-      <div className="relative z-10 mx-auto flex h-full w-full items-start justify-center py-1 sm:py-3">
+    <main className="space-atmosphere relative min-h-screen overflow-hidden p-5 sm:p-10">
+      <div className="relative z-10 mx-auto flex w-full items-start justify-center py-3 sm:py-8">
         {parentRuns.length > 0 ? (
           <ParentRunIndex parentRuns={parentRuns} />
         ) : (
