@@ -1,7 +1,8 @@
 import { createServerClient } from "@supabase/ssr";
+import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { cookies } from "next/headers";
 
-export async function createClient() {
+function getSupabaseConfig() {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
@@ -10,6 +11,12 @@ export async function createClient() {
       "Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY.",
     );
   }
+
+  return { supabaseUrl, supabaseAnonKey };
+}
+
+export async function createClient() {
+  const { supabaseUrl, supabaseAnonKey } = getSupabaseConfig();
 
   const cookieStore = await cookies();
 
@@ -29,4 +36,9 @@ export async function createClient() {
       },
     },
   });
+}
+
+export function createStaticClient() {
+  const { supabaseUrl, supabaseAnonKey } = getSupabaseConfig();
+  return createSupabaseClient(supabaseUrl, supabaseAnonKey);
 }

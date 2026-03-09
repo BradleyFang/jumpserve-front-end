@@ -6,6 +6,7 @@ import Link from "next/link";
 export type EmulatedParentRun = {
   id: number;
   createdAt: string | null;
+  snapshotLengthSeconds: number | null;
 };
 
 export type EmulatedRun = {
@@ -14,6 +15,8 @@ export type EmulatedRun = {
   parentRunId: number | null;
   clientNumber: number | null;
   delayAddedMs: number | null;
+  clientStartDelayMs: number | null;
+  clientFileSizeMegabytes: number | null;
   congestionControlAlgorithmId: number | null;
   congestionControlAlgorithmName: string | null;
 };
@@ -106,6 +109,7 @@ const SERIES_COLORS = [
 const THROUGHPUT_AXIS_MAX_MBPS = 120;
 const THROUGHPUT_AXIS_TICK_STEP_MBPS = 40;
 const THROUGHPUT_SUM_SERIES_ID = -1;
+const X_AXIS_REFERENCE_POINT_COUNT = 8;
 
 function formatClientSummary(run: EmulatedRun | null) {
   if (!run) {
@@ -119,8 +123,14 @@ function formatClientSummary(run: EmulatedRun | null) {
       : "n/a");
   const delayLabel =
     run.delayAddedMs !== null ? `${run.delayAddedMs}ms` : "n/a";
+  const clientStartDelayLabel =
+    run.clientStartDelayMs !== null ? `${run.clientStartDelayMs}ms start` : "n/a start";
+  const clientFileSizeLabel =
+    run.clientFileSizeMegabytes !== null
+      ? `${run.clientFileSizeMegabytes}MB`
+      : "n/a size";
 
-  return `${ccaLabel}, ${delayLabel}`;
+  return `${ccaLabel}, ${delayLabel}, ${clientStartDelayLabel}, ${clientFileSizeLabel}`;
 }
 
 function trimTrailingZeros(value: string) {
@@ -145,7 +155,23 @@ function formatScaleValue(value: number) {
 }
 
 function formatSecondsValue(value: number) {
-  return value.toFixed(1);
+  return value.toFixed(2);
+}
+
+function roundToHundredth(value: number) {
+  return Number(value.toFixed(2));
+}
+
+function getPointXSeconds(point: EmulatedPerSecondStat, index: number) {
+  if (point.elapsedSeconds !== null && Number.isFinite(point.elapsedSeconds)) {
+    return roundToHundredth(point.elapsedSeconds);
+  }
+
+  if (point.snapshotIndex !== null) {
+    return roundToHundredth(point.snapshotIndex);
+  }
+
+  return roundToHundredth(index);
 }
 
 function getNiceStep(rawStep: number) {
@@ -192,47 +218,21 @@ function buildNiceYTicks(minValue: number, maxValue: number, count = 6) {
   return { min: niceMin, max: niceMax, ticks };
 }
 
-function buildNiceXTicks(
-  minValue: number,
-  maxValue: number,
-  count = 8,
-  maxTickCount = 10,
-) {
-  if (
-    !Number.isFinite(minValue) ||
-    !Number.isFinite(maxValue) ||
-    maxValue <= minValue
-  ) {
-    return [Math.max(0, Math.round(minValue || 0))];
+function buildReferenceXTicks(maxValue: number, referencePointCount = 8) {
+  if (!Number.isFinite(maxValue) || maxValue <= 0) {
+    return [0];
   }
 
-  const rawStep = (maxValue - minValue) / Math.max(count - 1, 1);
-  let step = Math.max(1, Math.round(getNiceStep(rawStep)));
+  const step = maxValue / referencePointCount;
+  const ticks = Array.from(
+    { length: referencePointCount + 1 },
+    (_, index) => roundToHundredth(step * index),
+  );
 
-  const buildTicksForStep = (stepValue: number) => {
-    const ticks: number[] = [];
-
-    for (let value = Math.ceil(minValue); value <= maxValue; value += stepValue) {
-      ticks.push(value);
-    }
-
-    if (ticks[ticks.length - 1] !== maxValue) {
-      ticks.push(maxValue);
-    }
-
-    return ticks;
-  };
-
-  let ticks = buildTicksForStep(step);
-  while (ticks.length > maxTickCount) {
-    step += 1;
-    ticks = buildTicksForStep(step);
-  }
-
-  return ticks;
+  return Array.from(new Set(ticks));
 }
 
-export function EmulatedRunsDashboard({
+function useChartPanelData({
   parentRuns,
   runs,
   stats,
@@ -249,8 +249,6 @@ export function EmulatedRunsDashboard({
       ? initialSelectedParentRunId
       : (parentRuns[0]?.id ?? null);
   const selectedParentRunId = defaultSelectedParentRunId;
-  const [expandedMetricId, setExpandedMetricId] = useState<string | null>(null);
-  const [hoveredMetricId, setHoveredMetricId] = useState<string | null>(null);
 
   const runsByParent = useMemo(() => {
     const grouped = new Map<number, EmulatedRun[]>();
@@ -316,7 +314,13 @@ export function EmulatedRunsDashboard({
         ? `id ${run.congestionControlAlgorithmId}`
         : "n/a");
     const delayLabel = run.delayAddedMs !== null ? `${run.delayAddedMs}ms` : "n/a";
-    const legendLabel = `${ccaLabel} ${delayLabel}`;
+    const clientStartDelayLabel =
+      run.clientStartDelayMs !== null ? `${run.clientStartDelayMs}ms start` : "n/a start";
+    const clientFileSizeLabel =
+      run.clientFileSizeMegabytes !== null
+        ? `${run.clientFileSizeMegabytes}MB`
+        : "n/a size";
+    const legendLabel = `${ccaLabel} ${delayLabel} ${clientStartDelayLabel} ${clientFileSizeLabel}`;
 
     return {
       runId: run.id,
@@ -332,6 +336,35 @@ export function EmulatedRunsDashboard({
     (total, series) => total + series.data.length,
     0,
   );
+
+  return {
+    selectedParentRun,
+    selectedRuns,
+    chartSeries,
+    totalSampleCount,
+  };
+}
+
+export function EmulatedRunChartsPanel({
+  parentRuns,
+  runs,
+  stats,
+  initialSelectedParentRunId = null,
+}: {
+  parentRuns: EmulatedParentRun[];
+  runs: EmulatedRun[];
+  stats: EmulatedPerSecondStat[];
+  initialSelectedParentRunId?: number | null;
+}) {
+  const { selectedParentRun, selectedRuns, chartSeries, totalSampleCount } =
+    useChartPanelData({
+      parentRuns,
+      runs,
+      stats,
+      initialSelectedParentRunId,
+    });
+  const [expandedMetricId, setExpandedMetricId] = useState<string | null>(null);
+  const [hoveredMetricId, setHoveredMetricId] = useState<string | null>(null);
 
   const expandedMetric = expandedMetricId
     ? METRICS.find((metric) => metric.id === expandedMetricId) ?? null
@@ -354,43 +387,6 @@ export function EmulatedRunsDashboard({
 
   return (
     <>
-      <section className="w-full max-w-6xl rounded-3xl border border-rose-200/70 bg-[#fff8fc]/95 p-6 shadow-2xl backdrop-blur-sm dark:border-slate-600/70 dark:bg-slate-800/78 sm:p-8">
-      <div className="mb-8 border-b border-rose-200/80 pb-6 dark:border-slate-600">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.28em] text-teal-700">
-            Jumpserve
-          </p>
-          <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-900 dark:text-slate-100 sm:text-4xl">
-            Emulated Run Explorer
-          </h1>
-          <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
-            Compare all child <code>emulated_runs</code>{" "}
-            on shared charts from <code>emulated_per_second_stats</code>.
-          </p>
-          </div>
-          <Link
-            href="/"
-            aria-label="Go to home"
-            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-rose-300/80 bg-[#fff5fb] text-slate-700 shadow-sm transition hover:border-rose-400 hover:bg-rose-50 dark:border-slate-500 dark:bg-slate-800/85 dark:text-slate-100 dark:hover:border-slate-400 dark:hover:bg-slate-700/90"
-          >
-            <svg
-              viewBox="0 0 24 24"
-              className="h-5 w-5"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.9"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="M3 10.5 12 3l9 7.5" />
-              <path d="M6 10v10h12V10" />
-              <path d="M10 20v-6h4v6" />
-            </svg>
-          </Link>
-        </div>
-      </div>
-
       {selectedParentRun ? (
         <>
           {selectedRuns.length > 0 ? (
@@ -435,7 +431,6 @@ export function EmulatedRunsDashboard({
       ) : (
         <EmptyState text="No parent run selected." />
       )}
-      </section>
       {expandedMetric ? (
         <div
           className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm"
@@ -469,6 +464,64 @@ export function EmulatedRunsDashboard({
         </div>
       ) : null}
     </>
+  );
+}
+
+export function EmulatedRunsDashboard({
+  parentRuns,
+  runs,
+  stats,
+  initialSelectedParentRunId = null,
+}: {
+  parentRuns: EmulatedParentRun[];
+  runs: EmulatedRun[];
+  stats: EmulatedPerSecondStat[];
+  initialSelectedParentRunId?: number | null;
+}) {
+  return (
+    <section className="w-full max-w-6xl rounded-3xl border border-rose-200/70 bg-[#fff8fc]/95 p-6 shadow-2xl backdrop-blur-sm dark:border-slate-600/70 dark:bg-slate-800/78 sm:p-8">
+      <div className="mb-8 border-b border-rose-200/80 pb-6 dark:border-slate-600">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.28em] text-teal-700">
+              Jumpserve
+            </p>
+            <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-900 dark:text-slate-100 sm:text-4xl">
+              Emulated Run Explorer
+            </h1>
+            <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
+              Compare all child <code>emulated_runs</code>{" "}
+              on shared charts from <code>emulated_per_second_stats</code>.
+            </p>
+          </div>
+          <Link
+            href="/"
+            aria-label="Go to home"
+            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-rose-300/80 bg-[#fff5fb] text-slate-700 shadow-sm transition hover:border-rose-400 hover:bg-rose-50 dark:border-slate-500 dark:bg-slate-800/85 dark:text-slate-100 dark:hover:border-slate-400 dark:hover:bg-slate-700/90"
+          >
+            <svg
+              viewBox="0 0 24 24"
+              className="h-5 w-5"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.9"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M3 10.5 12 3l9 7.5" />
+              <path d="M6 10v10h12V10" />
+              <path d="M10 20v-6h4v6" />
+            </svg>
+          </Link>
+        </div>
+      </div>
+      <EmulatedRunChartsPanel
+        parentRuns={parentRuns}
+        runs={runs}
+        stats={stats}
+        initialSelectedParentRunId={initialSelectedParentRunId}
+      />
+    </section>
   );
 }
 
@@ -556,7 +609,7 @@ function MetricChart({
     .map((runSeries) => {
       const points = runSeries.data
         .map((point, index) => {
-          const xValue = point.elapsedSeconds ?? point.snapshotIndex ?? index;
+          const xValue = getPointXSeconds(point, index);
           const yValue = accessor(point);
           if (!Number.isFinite(xValue) || !Number.isFinite(yValue)) {
             return null;
@@ -610,8 +663,7 @@ function MetricChart({
   );
 
   const xMin = 0;
-  const xMaxData = Math.max(...xValues, 0);
-  const xMax = Math.ceil(xMaxData);
+  const xMax = roundToHundredth(Math.max(...xValues, 0));
   const yMinRaw = Math.min(...yValues);
   const yMaxRaw = Math.max(...yValues);
   const yPadding = Math.max((yMaxRaw - yMinRaw) * 0.12, 0.001);
@@ -632,7 +684,7 @@ function MetricChart({
   const yMin = yScale.min;
   const yMax = yScale.max;
   const yTicks = yScale.ticks;
-  const xTicks = buildNiceXTicks(xMin, xMax);
+  const xTicks = buildReferenceXTicks(xMax, X_AXIS_REFERENCE_POINT_COUNT);
   const xDenominator = xMax === xMin ? 1 : xMax - xMin;
   const yDenominator = yMax === yMin ? 1 : yMax - yMin;
 
@@ -667,7 +719,7 @@ function MetricChart({
           const sumByX = new Map<number, number>();
           for (const runSeries of normalizedSeries) {
             for (const point of runSeries.points) {
-              const roundedX = Number(point.xValue.toFixed(3));
+              const roundedX = roundToHundredth(point.xValue);
               const current = sumByX.get(roundedX) ?? 0;
               sumByX.set(roundedX, current + point.yValue);
             }
@@ -986,7 +1038,7 @@ function MetricChart({
               textAnchor="end"
               className={axisTickTextClass}
             >
-              {tick}
+              {formatSecondsValue(tick)}
             </text>
           </g>
         );
