@@ -83,7 +83,7 @@ export default async function ParentRunPage({
                 </h1>
                 <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
                   Compare all child <code>emulated_runs</code>{" "}
-                  on shared charts from <code>emulated_per_second_stats</code>.
+                  on shared charts from <code>emulated_snapshot_stats</code>.
                 </p>
               </div>
               <Link

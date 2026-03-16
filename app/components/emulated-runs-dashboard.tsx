@@ -8,6 +8,7 @@ export type EmulatedParentRun = {
   id: number;
   createdAt: string | null;
   snapshotLengthSeconds: number | null;
+  bottleneckRateMegabit: number | null;
 };
 
 export type EmulatedRun = {
@@ -107,8 +108,8 @@ const SERIES_COLORS = [
   "#0369a1",
 ];
 
-const THROUGHPUT_AXIS_MAX_MBPS = 120;
-const THROUGHPUT_AXIS_TICK_STEP_MBPS = 40;
+const THROUGHPUT_AXIS_LIMIT_MULTIPLIER = 2;
+const THROUGHPUT_AXIS_TICK_COUNT = 5;
 const THROUGHPUT_SUM_SERIES_ID = -1;
 const X_AXIS_REFERENCE_POINT_COUNT = 8;
 
@@ -231,6 +232,17 @@ function buildReferenceXTicks(maxValue: number, referencePointCount = 8) {
   );
 
   return Array.from(new Set(ticks));
+}
+
+function buildFixedRangeTicks(maxValue: number, tickCount = THROUGHPUT_AXIS_TICK_COUNT) {
+  if (!Number.isFinite(maxValue) || maxValue <= 0) {
+    return [0, 1];
+  }
+
+  const step = maxValue / Math.max(tickCount - 1, 1);
+  return Array.from({ length: tickCount }, (_, index) =>
+    roundToHundredth(step * index),
+  );
 }
 
 function useChartPanelData({
@@ -370,6 +382,13 @@ export function EmulatedRunChartsPanel({
   const expandedMetric = expandedMetricId
     ? METRICS.find((metric) => metric.id === expandedMetricId) ?? null
     : null;
+  const throughputAxisMaxMbps =
+    selectedParentRun?.bottleneckRateMegabit !== null &&
+    selectedParentRun?.bottleneckRateMegabit !== undefined
+      ? roundToHundredth(
+          selectedParentRun.bottleneckRateMegabit * THROUGHPUT_AXIS_LIMIT_MULTIPLIER,
+        )
+      : null;
 
   useEffect(() => {
     if (!expandedMetric) {
@@ -407,6 +426,7 @@ export function EmulatedRunChartsPanel({
                     title={metric.title}
                     unit={metric.unit}
                     accessor={metric.accessor}
+                    throughputAxisMaxMbps={throughputAxisMaxMbps}
                     onExpand={() => {
                       setHoveredMetricId(null);
                       setExpandedMetricId(metric.id);
@@ -459,6 +479,7 @@ export function EmulatedRunChartsPanel({
               title={expandedMetric.title}
               unit={expandedMetric.unit}
               accessor={expandedMetric.accessor}
+              throughputAxisMaxMbps={throughputAxisMaxMbps}
               size="expanded"
             />
           </div>
@@ -492,7 +513,7 @@ export function EmulatedRunsDashboard({
             </h1>
             <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
               Compare all child <code>emulated_runs</code>{" "}
-              on shared charts from <code>emulated_per_second_stats</code>.
+              on shared charts from <code>emulated_snapshot_stats</code>.
             </p>
           </div>
           <Link
@@ -540,6 +561,7 @@ function MetricChart({
   title,
   unit,
   accessor,
+  throughputAxisMaxMbps,
   onExpand,
   size = "default",
   onCardHoverStart,
@@ -552,6 +574,7 @@ function MetricChart({
   title: string;
   unit: string;
   accessor: (point: EmulatedPerSecondStat) => number | null;
+  throughputAxisMaxMbps?: number | null;
   onExpand?: () => void;
   size?: "default" | "expanded";
   onCardHoverStart?: () => void;
@@ -567,6 +590,7 @@ function MetricChart({
   const [hoveredCursorX, setHoveredCursorX] = useState<number | null>(null);
   const [pinnedRunId, setPinnedRunId] = useState<number | null>(null);
   const [pinnedPoint, setPinnedPoint] = useState<HoveredChartPoint | null>(null);
+  const [hiddenRunIds, setHiddenRunIds] = useState<number[]>([]);
   const isExpanded = size === "expanded";
   const areInlineChartInteractionsEnabled = isExpanded;
   const chartWidth = isExpanded ? 1200 : 460;
@@ -656,30 +680,32 @@ function MetricChart({
     );
   }
 
-  const xValues = normalizedSeries.flatMap((runSeries) =>
+  const visibleNormalizedSeries = normalizedSeries.filter(
+    (runSeries) => !hiddenRunIds.includes(runSeries.runId),
+  );
+
+  const xValues = visibleNormalizedSeries.flatMap((runSeries) =>
     runSeries.points.map((point) => point.xValue),
   );
-  const yValues = normalizedSeries.flatMap((runSeries) =>
+  const yValues = visibleNormalizedSeries.flatMap((runSeries) =>
     runSeries.points.map((point) => point.yValue),
   );
 
   const xMin = 0;
   const xMax = roundToHundredth(Math.max(...xValues, 0));
-  const yMinRaw = Math.min(...yValues);
-  const yMaxRaw = Math.max(...yValues);
+  const yMinRaw = yValues.length > 0 ? Math.min(...yValues) : 0;
+  const yMaxRaw = yValues.length > 0 ? Math.max(...yValues) : 0;
   const yPadding = Math.max((yMaxRaw - yMinRaw) * 0.12, 0.001);
+  const throughputAxisCeiling =
+    throughputAxisMaxMbps === null || throughputAxisMaxMbps === undefined
+      ? null
+      : Math.max(throughputAxisMaxMbps, 0.001);
   const yScale =
-    metricId === "mbps"
+    metricId === "mbps" && throughputAxisCeiling !== null
       ? {
           min: 0,
-          max: THROUGHPUT_AXIS_MAX_MBPS,
-          ticks: Array.from(
-            {
-              length:
-                THROUGHPUT_AXIS_MAX_MBPS / THROUGHPUT_AXIS_TICK_STEP_MBPS + 1,
-            },
-            (_, index) => index * THROUGHPUT_AXIS_TICK_STEP_MBPS,
-          ),
+          max: throughputAxisCeiling,
+          ticks: buildFixedRangeTicks(throughputAxisCeiling),
         }
       : buildNiceYTicks(0, Math.max(yMaxRaw + yPadding, 0.001));
   const yMin = yScale.min;
@@ -689,7 +715,7 @@ function MetricChart({
   const xDenominator = xMax === xMin ? 1 : xMax - xMin;
   const yDenominator = yMax === yMin ? 1 : yMax - yMin;
 
-  const seriesForRender = normalizedSeries.map((runSeries) => {
+  const seriesForRender = visibleNormalizedSeries.map((runSeries) => {
     const svgPoints = runSeries.points.map((point) => {
       const boundedXValue = Math.max(xMin, Math.min(xMax, point.xValue));
       const boundedYValue = Math.max(yMin, Math.min(yMax, point.yValue));
@@ -714,11 +740,11 @@ function MetricChart({
       path,
     };
   });
-  const throughputSumForRender =
+  const throughputSumForLegend =
     metricId === "mbps"
       ? (() => {
           const sumByX = new Map<number, number>();
-          for (const runSeries of normalizedSeries) {
+          for (const runSeries of visibleNormalizedSeries) {
             for (const point of runSeries.points) {
               const roundedX = roundToHundredth(point.xValue);
               const current = sumByX.get(roundedX) ?? 0;
@@ -764,9 +790,15 @@ function MetricChart({
           };
         })()
       : null;
-  const interactiveSeriesForRender = throughputSumForRender
-    ? [...seriesForRender, throughputSumForRender]
-    : seriesForRender;
+  const interactiveSeriesForRender =
+    throughputSumForLegend &&
+    !hiddenRunIds.includes(THROUGHPUT_SUM_SERIES_ID)
+      ? [...seriesForRender, throughputSumForLegend]
+      : seriesForRender;
+  const legendSeries = throughputSumForLegend
+    ? [...normalizedSeries, throughputSumForLegend]
+    : normalizedSeries;
+  const hasVisibleSeries = interactiveSeriesForRender.length > 0;
 
   const chartClassName = isExpanded
     ? "h-[70vh] w-full overflow-visible rounded-xl bg-[#fff2f8] text-slate-300 dark:bg-slate-900/65 dark:text-slate-600"
@@ -966,6 +998,30 @@ function MetricChart({
       values,
     };
   };
+  const toggleRunVisibility = (runId: number) => {
+    const isCurrentlyHidden = hiddenRunIds.includes(runId);
+
+    if (!isCurrentlyHidden) {
+      if (hoveredRunId === runId) {
+        setHoveredRunId(null);
+        setHoveredPoint(null);
+      }
+
+      if (pinnedRunId === runId) {
+        setPinnedRunId(null);
+        setPinnedPoint(null);
+        setHoveredRunId(null);
+        setHoveredPoint(null);
+        setHoveredSlice(null);
+      }
+    }
+
+    setHiddenRunIds((current) =>
+      current.includes(runId)
+        ? current.filter((currentRunId) => currentRunId !== runId)
+        : [...current, runId],
+    );
+  };
   const crosshairX = hoveredSlice?.x ?? displayedPoint?.x ?? hoveredCursorX ?? null;
   const sliceTooltipHeight = hoveredSlice
     ? (isExpanded ? 26 : 22) +
@@ -1095,6 +1151,16 @@ function MetricChart({
         stroke="currentColor"
         strokeWidth={1}
       />
+      {!hasVisibleSeries ? (
+        <text
+          x={leftPadding + plotWidth / 2}
+          y={topPadding + plotHeight / 2}
+          textAnchor="middle"
+          className={isExpanded ? "fill-slate-500 text-[12px]" : "fill-slate-500 text-[10px]"}
+        >
+          All series hidden. Use the legend to show them again.
+        </text>
+      ) : null}
       {interactiveSeriesForRender.map((runSeries) => (
         <g key={runSeries.runId}>
           {runSeries.svgPoints.length >= 2 ? (
@@ -1534,16 +1600,33 @@ function MetricChart({
           )}
         </div>
         <div className="mt-3 flex flex-wrap gap-2">
-          {interactiveSeriesForRender.map((runSeries) => (
-            <div
+          {legendSeries.map((runSeries) => {
+            const isHidden = hiddenRunIds.includes(runSeries.runId);
+            const isActive = !isHidden && (
+              activeRunId === null || activeRunId === runSeries.runId
+            );
+
+            return (
+            <button
               key={runSeries.runId}
-              className={`group cursor-pointer rounded-lg border bg-[#fff3f8] px-2.5 py-1 text-[11px] text-slate-700 transition dark:bg-slate-700/45 dark:text-slate-100 ${
-                activeRunId === null || activeRunId === runSeries.runId
-                  ? "border-rose-200/90 hover:-translate-y-0.5 hover:border-rose-300 hover:shadow-sm dark:border-slate-600 dark:hover:border-slate-400 dark:hover:shadow-none"
-                  : "border-rose-200/70 opacity-60 dark:border-slate-600/60"
+              type="button"
+              aria-pressed={!isHidden}
+              className={`group rounded-lg border bg-[#fff3f8] px-2.5 py-1 text-[11px] text-slate-700 transition dark:bg-slate-700/45 dark:text-slate-100 ${
+                isHidden
+                  ? "border-rose-200/70 opacity-45 dark:border-slate-600/60"
+                  : isActive
+                    ? "cursor-pointer border-rose-200/90 hover:-translate-y-0.5 hover:border-rose-300 hover:shadow-sm dark:border-slate-600 dark:hover:border-slate-400 dark:hover:shadow-none"
+                    : "cursor-pointer border-rose-200/70 opacity-60 dark:border-slate-600/60"
               }`}
               title={runSeries.label}
+              onClick={(event) => {
+                event.stopPropagation();
+                toggleRunVisibility(runSeries.runId);
+              }}
               onMouseEnter={() => {
+                if (isHidden) {
+                  return;
+                }
                 if (pinnedRunId !== null) {
                   return;
                 }
@@ -1551,13 +1634,20 @@ function MetricChart({
                 setHoveredPoint(null);
               }}
               onMouseLeave={() => {
+                if (isHidden) {
+                  return;
+                }
                 if (pinnedRunId !== null) {
                   return;
                 }
                 setHoveredRunId(null);
                 setHoveredPoint(null);
               }}
-              onClick={() => {
+              onDoubleClick={(event) => {
+                event.stopPropagation();
+                if (isHidden) {
+                  return;
+                }
                 if (pinnedRunId !== null) {
                   return;
                 }
@@ -1569,15 +1659,20 @@ function MetricChart({
             >
               <span
                 className={`mr-1.5 inline-block h-2 w-2 rounded-full align-middle transition-transform duration-150 ${
-                  activeRunId === runSeries.runId
+                  !isHidden && activeRunId === runSeries.runId
                     ? "scale-150 shadow-[0_0_0_3px_rgba(15,23,42,0.08)] dark:shadow-[0_0_0_3px_rgba(148,163,184,0.22)]"
-                    : "group-hover:scale-150 group-hover:shadow-[0_0_0_3px_rgba(15,23,42,0.08)] dark:group-hover:shadow-[0_0_0_3px_rgba(148,163,184,0.22)]"
+                    : isHidden
+                      ? ""
+                      : "group-hover:scale-150 group-hover:shadow-[0_0_0_3px_rgba(15,23,42,0.08)] dark:group-hover:shadow-[0_0_0_3px_rgba(148,163,184,0.22)]"
                 }`}
                 style={{ backgroundColor: runSeries.color }}
               />
+              <span className={isHidden ? "line-through" : undefined}>
               {runSeries.shortLabel}
-            </div>
-          ))}
+              </span>
+            </button>
+            );
+          })}
         </div>
       </article>
     </div>

@@ -35,6 +35,8 @@ type RangeBucketConfig = {
 
 type ParentRunSortColumn =
   | "run"
+  | "elapsedSeconds"
+  | "flowCompletionTime"
   | "totalFileSize"
   | "clientStartDelay"
   | "queueBufferSize"
@@ -170,6 +172,32 @@ function formatValueList(values: number[], unitLabel: string) {
   }
 
   return values.map((value) => `${formatNumber(value)} ${unitLabel}`).join(", ");
+}
+
+function formatFlowCompletionTime(value: number | null) {
+  if (value === null || !Number.isFinite(value)) {
+    return "None";
+  }
+
+  if (value >= 1000) {
+    return `${formatNumber(value / 1000)} s`;
+  }
+
+  return `${formatNumber(value)} ms`;
+}
+
+function getAverageFlowCompletionTime(
+  parentRun: ParentRunIndexItem,
+) {
+  const values = parentRun.clientFlowCompletionTimes
+    .map((flow) => flow.flowCompletionTimeMs)
+    .filter((value): value is number => value !== null && Number.isFinite(value));
+
+  if (values.length === 0) {
+    return null;
+  }
+
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
 function ListViewIcon() {
@@ -526,6 +554,10 @@ export function ParentRunIndex({
       switch (parentRunSortColumn) {
         case "run":
           return parentRun.id;
+        case "elapsedSeconds":
+          return parentRun.chartDurationSeconds ?? -1;
+        case "flowCompletionTime":
+          return getAverageFlowCompletionTime(parentRun) ?? -1;
         case "totalFileSize":
           return parentRun.totalClientFileSizeMegabytes ?? -1;
         case "clientStartDelay":
@@ -1243,7 +1275,7 @@ export function ParentRunIndex({
           </button>
         </article>
 
-        <article className="rounded-3xl border border-rose-200/70 bg-[linear-gradient(165deg,rgba(255,250,253,0.98)_0%,rgba(255,245,250,0.97)_100%)] p-6 shadow-[0_22px_50px_rgba(15,23,42,0.12)] backdrop-blur-sm dark:border-slate-600/70 dark:bg-[linear-gradient(165deg,rgba(30,41,59,0.91)_0%,rgba(51,65,85,0.83)_100%)] dark:shadow-none sm:p-8">
+        <article className="flex min-h-[32rem] flex-col rounded-3xl border border-rose-200/70 bg-[linear-gradient(165deg,rgba(255,250,253,0.98)_0%,rgba(255,245,250,0.97)_100%)] p-6 shadow-[0_22px_50px_rgba(15,23,42,0.12)] backdrop-blur-sm dark:border-slate-600/70 dark:bg-[linear-gradient(165deg,rgba(30,41,59,0.91)_0%,rgba(51,65,85,0.83)_100%)] dark:shadow-none sm:p-8 lg:min-h-[calc(100dvh-9rem)]">
           <p className="text-center text-xs font-semibold uppercase tracking-[0.28em] text-teal-700">
             Jumpserve
           </p>
@@ -1286,23 +1318,23 @@ export function ParentRunIndex({
           </div>
 
           <div
-            className={`mx-auto mt-4 max-h-[65vh] w-full overflow-y-auto px-1 ${
+            className={`mx-auto mt-4 min-h-0 flex-1 overflow-y-auto px-1 pb-1 ${
               parentRunView === "list"
                 ? "max-w-6xl"
-                : "max-w-6xl grid gap-3 md:grid-cols-2 xl:grid-cols-3"
+                : "grid max-w-6xl content-start gap-3 md:grid-cols-2 xl:grid-cols-3"
             }`}
           >
             {filteredParentRuns.length > 0 ? (
               parentRunView === "list" ? (
-                <div className="overflow-hidden rounded-3xl border border-rose-200/80 bg-[linear-gradient(165deg,#fff7fb_0%,#fff0f7_100%)] dark:border-slate-600 dark:bg-[linear-gradient(165deg,rgba(51,65,85,0.78)_0%,rgba(71,85,105,0.72)_100%)]">
+                <div className="overflow-x-auto rounded-3xl border border-rose-200/80 bg-[linear-gradient(165deg,#fff7fb_0%,#fff0f7_100%)] dark:border-slate-600 dark:bg-[linear-gradient(165deg,rgba(51,65,85,0.78)_0%,rgba(71,85,105,0.72)_100%)]">
                   <table className="w-full table-fixed border-collapse">
                     <thead>
                       <tr className="border-b border-rose-200/80 bg-white/65 dark:border-slate-500 dark:bg-slate-800/45">
-                        <th className="w-[36%] px-5 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-300">
+                        <th className="w-[24%] px-3 py-2.5 text-left text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500 dark:text-slate-300">
                           <button
                             type="button"
                             onClick={() => toggleParentRunSort("run")}
-                            className="flex w-full items-center justify-between text-left hover:text-slate-700 dark:hover:text-slate-100"
+                            className="flex w-full items-center justify-between gap-2 text-left hover:text-slate-700 dark:hover:text-slate-100"
                           >
                             Run
                             <SortIndicator
@@ -1311,52 +1343,78 @@ export function ParentRunIndex({
                             />
                           </button>
                         </th>
-                        <th className="w-[16%] px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-300">
+                        <th className="w-[10%] px-2.5 py-2.5 text-left text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500 dark:text-slate-300">
+                          <button
+                            type="button"
+                            onClick={() => toggleParentRunSort("elapsedSeconds")}
+                            className="flex w-full items-center justify-between gap-2 text-left hover:text-slate-700 dark:hover:text-slate-100"
+                          >
+                            Elapsed
+                            <SortIndicator
+                              isActive={parentRunSortColumn === "elapsedSeconds"}
+                              direction={parentRunSortDirection}
+                            />
+                          </button>
+                        </th>
+                        <th className="w-[17%] px-2.5 py-2.5 text-left text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500 dark:text-slate-300">
+                          <button
+                            type="button"
+                            onClick={() => toggleParentRunSort("flowCompletionTime")}
+                            className="flex w-full items-center justify-between gap-2 text-left hover:text-slate-700 dark:hover:text-slate-100"
+                          >
+                            Flow Times
+                            <SortIndicator
+                              isActive={parentRunSortColumn === "flowCompletionTime"}
+                              direction={parentRunSortDirection}
+                            />
+                          </button>
+                        </th>
+                        <th className="w-[12%] px-2.5 py-2.5 text-left text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500 dark:text-slate-300">
                           <button
                             type="button"
                             onClick={() => toggleParentRunSort("totalFileSize")}
-                            className="flex w-full items-center justify-between text-left hover:text-slate-700 dark:hover:text-slate-100"
+                            className="flex w-full items-center justify-between gap-2 text-left hover:text-slate-700 dark:hover:text-slate-100"
                           >
-                            Total File Size
+                            File Size
                             <SortIndicator
                               isActive={parentRunSortColumn === "totalFileSize"}
                               direction={parentRunSortDirection}
                             />
                           </button>
                         </th>
-                        <th className="w-[20%] px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-300">
+                        <th className="w-[14%] px-2.5 py-2.5 text-left text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500 dark:text-slate-300">
                           <button
                             type="button"
                             onClick={() => toggleParentRunSort("clientStartDelay")}
-                            className="flex w-full items-center justify-between text-left hover:text-slate-700 dark:hover:text-slate-100"
+                            className="flex w-full items-center justify-between gap-2 text-left hover:text-slate-700 dark:hover:text-slate-100"
                           >
-                            Client Start Delay
+                            Start Delay
                             <SortIndicator
                               isActive={parentRunSortColumn === "clientStartDelay"}
                               direction={parentRunSortDirection}
                             />
                           </button>
                         </th>
-                        <th className="w-[14%] px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-300">
+                        <th className="w-[11%] px-2.5 py-2.5 text-left text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500 dark:text-slate-300">
                           <button
                             type="button"
                             onClick={() => toggleParentRunSort("queueBufferSize")}
-                            className="flex w-full items-center justify-between text-left hover:text-slate-700 dark:hover:text-slate-100"
+                            className="flex w-full items-center justify-between gap-2 text-left hover:text-slate-700 dark:hover:text-slate-100"
                           >
-                            Queue Buffer Size
+                            Queue
                             <SortIndicator
                               isActive={parentRunSortColumn === "queueBufferSize"}
                               direction={parentRunSortDirection}
                             />
                           </button>
                         </th>
-                        <th className="w-[14%] px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-300">
+                        <th className="w-[12%] px-2.5 py-2.5 text-left text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500 dark:text-slate-300">
                           <button
                             type="button"
                             onClick={() => toggleParentRunSort("bottleneckRate")}
-                            className="flex w-full items-center justify-between text-left hover:text-slate-700 dark:hover:text-slate-100"
+                            className="flex w-full items-center justify-between gap-2 text-left hover:text-slate-700 dark:hover:text-slate-100"
                           >
-                            Bottleneck Rate
+                            Bottleneck
                             <SortIndicator
                               isActive={parentRunSortColumn === "bottleneckRate"}
                               direction={parentRunSortDirection}
@@ -1379,17 +1437,17 @@ export function ParentRunIndex({
                           }}
                           className="cursor-pointer border-b border-rose-100/80 align-top transition hover:bg-white/50 focus-visible:bg-white/50 focus-visible:outline-none last:border-b-0 dark:border-slate-600/70 dark:hover:bg-slate-800/30 dark:focus-visible:bg-slate-800/30"
                         >
-                          <td className="px-5 py-4">
+                          <td className="px-3 py-3 align-top">
                             <Link href={`/parent-run/${parentRun.id}`} className="block min-w-0">
-                              <div className="flex flex-col gap-1 text-sm text-slate-500 dark:text-slate-300">
-                                <span className="uppercase tracking-[0.18em]">
+                              <div className="flex flex-col gap-1 text-xs text-slate-500 dark:text-slate-300">
+                                <span className="uppercase tracking-[0.16em]">
                                   {parentRun.clientCount} client{parentRun.clientCount === 1 ? "" : "s"}
                                 </span>
                               </div>
-                              <span className="mt-2 block min-w-0 text-base font-medium text-slate-800 dark:text-slate-100">
+                              <span className="mt-1.5 block min-w-0 break-words text-sm font-medium leading-5 text-slate-800 dark:text-slate-100">
                                 {parentRun.clientSummaryLine}
                               </span>
-                              <span className="mt-2.5 block text-sm uppercase tracking-[0.16em] text-slate-500 transition hover:text-rose-700 dark:text-slate-200 dark:hover:text-white">
+                              <span className="mt-2 block text-xs uppercase tracking-[0.14em] text-slate-500 transition hover:text-rose-700 dark:text-slate-200 dark:hover:text-white">
                                 Parent #{parentRun.id}
                               </span>
                               <span className="mt-1.5 block text-xs text-slate-500 dark:text-slate-200">
@@ -1397,20 +1455,39 @@ export function ParentRunIndex({
                               </span>
                             </Link>
                           </td>
-                          <td className="px-4 py-4 text-sm text-slate-600 dark:text-slate-200">
+                          <td className="px-2.5 py-3 text-xs leading-5 text-slate-600 dark:text-slate-200">
+                            {parentRun.chartDurationSeconds === null
+                              ? "None"
+                              : `${formatNumber(parentRun.chartDurationSeconds)} s`}
+                          </td>
+                          <td className="px-2.5 py-3 text-xs leading-5 text-slate-600 dark:text-slate-200">
+                            <div className="flex flex-wrap gap-x-2 gap-y-1">
+                              {parentRun.clientFlowCompletionTimes.length > 0 ? (
+                                parentRun.clientFlowCompletionTimes.map((flow) => (
+                                  <span key={flow.clientNumber}>
+                                    C{flow.clientNumber}:{" "}
+                                    {formatFlowCompletionTime(flow.flowCompletionTimeMs)}
+                                  </span>
+                                ))
+                              ) : (
+                                <span>None</span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="px-2.5 py-3 text-xs leading-5 text-slate-600 dark:text-slate-200">
                             {parentRun.totalClientFileSizeMegabytes === null
                               ? "None"
                               : `${formatNumber(parentRun.totalClientFileSizeMegabytes)} MB`}
                           </td>
-                          <td className="px-4 py-4 text-sm text-slate-600 dark:text-slate-200">
+                          <td className="px-2.5 py-3 text-xs leading-5 text-slate-600 dark:text-slate-200">
                             {formatValueList(parentRun.clientStartDelayMsValues, "ms")}
                           </td>
-                          <td className="px-4 py-4 text-sm text-slate-600 dark:text-slate-200">
+                          <td className="px-2.5 py-3 text-xs leading-5 text-slate-600 dark:text-slate-200">
                             {parentRun.queueBufferSizeKilobyte === null
                               ? "None"
                               : `${formatNumber(parentRun.queueBufferSizeKilobyte)} kbytes`}
                           </td>
-                          <td className="px-4 py-4 text-sm text-slate-600 dark:text-slate-200">
+                          <td className="px-2.5 py-3 text-xs leading-5 text-slate-600 dark:text-slate-200">
                             {parentRun.bottleneckRateMegabit === null
                               ? "None"
                               : `${formatNumber(parentRun.bottleneckRateMegabit)} mbit`}
