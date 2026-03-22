@@ -2,8 +2,11 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useMemo, useState } from "react";
-import type { ParentRunIndexItem } from "@/lib/emulated-runs-data";
+import { useEffect, useMemo, useState } from "react";
+import type {
+  ParentRunIndexItem,
+  ParentRunIndexPage,
+} from "@/lib/emulated-runs-data";
 
 type ParentRunFilterState = {
   normalizedRunSearchQuery: string;
@@ -18,6 +21,7 @@ type ParentRunFilterState = {
 
 const CLIENT_COUNT_OPTIONS = [2, 3, 4];
 const FILTER_OPTION_PREVIEW_COUNT = 6;
+const PARENT_RUN_PAGE_SIZE = 30;
 
 type RangeBucket = {
   start: number;
@@ -198,6 +202,24 @@ function getAverageFlowCompletionTime(
   }
 
   return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function buildVisiblePageNumbers(currentPage: number, totalPages: number) {
+  if (totalPages <= 7) {
+    return Array.from({ length: totalPages }, (_, index) => index + 1);
+  }
+
+  const pages = new Set<number>([1, 2, totalPages - 1, totalPages]);
+
+  for (
+    let page = Math.max(1, currentPage - 1);
+    page <= Math.min(totalPages, currentPage + 1);
+    page += 1
+  ) {
+    pages.add(page);
+  }
+
+  return Array.from(pages).sort((a, b) => a - b);
 }
 
 function ListViewIcon() {
@@ -397,14 +419,18 @@ function filterParentRuns(
 }
 
 export function ParentRunIndex({
-  parentRuns,
+  initialPage,
 }: {
-  parentRuns: ParentRunIndexItem[];
+  initialPage: ParentRunIndexPage;
 }) {
   const router = useRouter();
+  const [pageData, setPageData] = useState(initialPage);
+  const [isLoadingPage, setIsLoadingPage] = useState(false);
+  const [pageLoadError, setPageLoadError] = useState<string | null>(null);
+  const [pageJumpValue, setPageJumpValue] = useState(String(initialPage.page));
   const [runSearchQuery, setRunSearchQuery] = useState("");
   const [areExtraFiltersVisible, setAreExtraFiltersVisible] = useState(false);
-  const [parentRunView, setParentRunView] = useState<"list" | "grid">("grid");
+  const [parentRunView, setParentRunView] = useState<"list" | "grid">("list");
   const [parentRunSortColumn, setParentRunSortColumn] =
     useState<ParentRunSortColumn>("run");
   const [parentRunSortDirection, setParentRunSortDirection] =
@@ -424,6 +450,10 @@ export function ParentRunIndex({
     useState<number[]>([]);
   const [selectedQueueBufferSizeRanges, setSelectedQueueBufferSizeRanges] =
     useState<number[]>([]);
+  const parentRuns = pageData.parentRuns;
+  const currentPage = pageData.page;
+  const totalPages = pageData.totalPages;
+  const totalCount = pageData.totalCount;
   const normalizedRunSearchQuery = runSearchQuery.trim().toLowerCase();
   const isFilterOptionSectionExpanded = (sectionId: string) =>
     expandedFilterOptionSections.includes(sectionId);
@@ -737,6 +767,49 @@ export function ParentRunIndex({
       parentRuns,
       rangeBucketConfig,
     ],
+  );
+
+  useEffect(() => {
+    setPageJumpValue(String(currentPage));
+  }, [currentPage]);
+
+  const loadPage = async (pageNumber: number) => {
+    const clampedPageNumber = Math.min(Math.max(pageNumber, 1), totalPages);
+
+    if (isLoadingPage || clampedPageNumber === currentPage) {
+      return;
+    }
+
+    setIsLoadingPage(true);
+    setPageLoadError(null);
+
+    try {
+      const searchParams = new URLSearchParams({
+        page: String(clampedPageNumber),
+        pageSize: String(PARENT_RUN_PAGE_SIZE),
+      });
+      const response = await fetch(`/api/parent-runs?${searchParams.toString()}`, {
+        cache: "no-store",
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to load parent run page.");
+      }
+
+      const payload = (await response.json()) as ParentRunIndexPage;
+      setPageData(payload);
+    } catch (error) {
+      setPageLoadError(
+        error instanceof Error ? error.message : "Failed to load parent run page.",
+      );
+    } finally {
+      setIsLoadingPage(false);
+    }
+  };
+
+  const visiblePageNumbers = useMemo(
+    () => buildVisiblePageNumbers(currentPage, totalPages),
+    [currentPage, totalPages],
   );
 
   return (
@@ -1286,7 +1359,9 @@ export function ParentRunIndex({
             Search and open a parent run.
           </p>
           <p className="mt-5 text-center text-xs uppercase tracking-[0.14em] text-slate-500 dark:text-slate-300">
-            Showing {filteredParentRuns.length} of {parentRuns.length} parent runs
+            Page {currentPage} of {totalPages}. Showing {filteredParentRuns.length}{" "}
+            matching rows from {pageData.pageSize} tests on this page and{" "}
+            {totalCount} total tests
           </p>
           <div className="mt-4 flex justify-end">
             <div className="inline-flex rounded-xl border border-rose-200 bg-white/90 p-1 dark:border-slate-500 dark:bg-slate-800/75">
@@ -1539,6 +1614,99 @@ export function ParentRunIndex({
               </div>
             )}
           </div>
+          {pageLoadError ? (
+            <p className="mt-4 text-center text-sm text-rose-700 dark:text-rose-300">
+              {pageLoadError}
+            </p>
+          ) : null}
+          {totalPages > 1 ? (
+            <div className="mt-5 flex flex-col items-center gap-3">
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void loadPage(currentPage - 1)}
+                  disabled={isLoadingPage || currentPage <= 1}
+                  className="rounded-xl border border-rose-300/80 bg-white/90 px-3 py-2 text-sm font-medium text-slate-700 transition hover:border-rose-400 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-500 dark:bg-slate-800/80 dark:text-slate-100 dark:hover:border-slate-400 dark:hover:bg-slate-700/90"
+                >
+                  Prev
+                </button>
+                {visiblePageNumbers.map((pageNumber, index) => {
+                  const previousPageNumber = visiblePageNumbers[index - 1];
+                  const shouldShowGap =
+                    previousPageNumber !== undefined &&
+                    pageNumber - previousPageNumber > 1;
+
+                  return (
+                    <div key={pageNumber} className="contents">
+                      {shouldShowGap ? (
+                        <span className="px-1 text-sm text-slate-500 dark:text-slate-300">
+                          ...
+                        </span>
+                      ) : null}
+                      <button
+                        type="button"
+                        onClick={() => void loadPage(pageNumber)}
+                        disabled={isLoadingPage}
+                        className={`min-w-10 rounded-xl border px-3 py-2 text-sm font-medium transition ${
+                          pageNumber === currentPage
+                            ? "border-slate-700 bg-slate-700 text-white dark:border-slate-300 dark:bg-slate-200 dark:text-slate-900"
+                            : "border-rose-300/80 bg-white/90 text-slate-700 hover:border-rose-400 hover:bg-rose-50 dark:border-slate-500 dark:bg-slate-800/80 dark:text-slate-100 dark:hover:border-slate-400 dark:hover:bg-slate-700/90"
+                        }`}
+                      >
+                        {pageNumber}
+                      </button>
+                    </div>
+                  );
+                })}
+                <button
+                  type="button"
+                  onClick={() => void loadPage(currentPage + 1)}
+                  disabled={isLoadingPage || currentPage >= totalPages}
+                  className="rounded-xl border border-rose-300/80 bg-white/90 px-3 py-2 text-sm font-medium text-slate-700 transition hover:border-rose-400 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-500 dark:bg-slate-800/80 dark:text-slate-100 dark:hover:border-slate-400 dark:hover:bg-slate-700/90"
+                >
+                  Next
+                </button>
+              </div>
+              <form
+                className="flex items-center gap-2"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  const parsedPage = Number.parseInt(pageJumpValue, 10);
+
+                  if (Number.isFinite(parsedPage)) {
+                    void loadPage(parsedPage);
+                  }
+                }}
+              >
+                <label
+                  htmlFor="page-jump-input"
+                  className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500 dark:text-slate-300"
+                >
+                  Go to page
+                </label>
+                <input
+                  id="page-jump-input"
+                  type="text"
+                  inputMode="numeric"
+                  value={pageJumpValue}
+                  onChange={(event) => setPageJumpValue(event.target.value)}
+                  className="w-16 rounded-xl border border-rose-300/80 bg-white/90 px-3 py-2 text-center text-sm text-slate-900 shadow-sm outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-200 dark:border-slate-500 dark:bg-slate-900/75 dark:text-slate-100 dark:focus:ring-teal-700/60"
+                />
+                <button
+                  type="submit"
+                  disabled={isLoadingPage}
+                  className="rounded-xl border border-rose-300/80 bg-white/90 px-3 py-2 text-sm font-medium text-slate-700 transition hover:border-rose-400 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-500 dark:bg-slate-800/80 dark:text-slate-100 dark:hover:border-slate-400 dark:hover:bg-slate-700/90"
+                >
+                  Go
+                </button>
+              </form>
+              {isLoadingPage ? (
+                <p className="text-sm text-slate-500 dark:text-slate-300">
+                  Loading page {pageJumpValue}...
+                </p>
+              ) : null}
+            </div>
+          ) : null}
         </article>
       </div>
     </section>

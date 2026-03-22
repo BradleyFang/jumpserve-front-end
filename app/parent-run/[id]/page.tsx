@@ -187,8 +187,8 @@ function ChartsLoadingFallback() {
       <p className="text-xs uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
         Loading chart data...
       </p>
-      <div className="grid gap-5 lg:grid-cols-3">
-        {Array.from({ length: 3 }, (_, index) => (
+      <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
+        {Array.from({ length: 4 }, (_, index) => (
           <div
             key={index}
             className="h-[320px] animate-pulse rounded-2xl border border-rose-200/80 bg-[#fff3f8] dark:border-slate-600 dark:bg-slate-800/55"

@@ -1,9 +1,12 @@
 import Link from "next/link";
 import { ParentRunIndex } from "@/app/components/parent-run-index";
-import { fetchParentRunsForIndex } from "@/lib/emulated-runs-data";
+import { fetchParentRunsForIndexPage } from "@/lib/emulated-runs-data";
 
 export default async function Home() {
-  const parentRuns = await fetchParentRunsForIndex();
+  const parentRunPage = await fetchParentRunsForIndexPage({
+    page: 1,
+    pageSize: 30,
+  });
 
   return (
     <main className="space-atmosphere relative min-h-screen overflow-hidden p-5 sm:p-10">
@@ -17,8 +20,10 @@ export default async function Home() {
           </Link>
         </div>
         <div className="flex w-full items-start justify-center">
-        {parentRuns.length > 0 ? (
-          <ParentRunIndex parentRuns={parentRuns} />
+        {parentRunPage.parentRuns.length > 0 ? (
+          <ParentRunIndex
+            initialPage={parentRunPage}
+          />
         ) : (
           <section className="w-full max-w-4xl rounded-3xl border border-rose-200/70 bg-[#fff8fc]/95 p-10 text-center shadow-xl dark:border-slate-600 dark:bg-slate-800/82">
             <p className="text-xs font-semibold uppercase tracking-[0.28em] text-teal-700">

@@ -95,6 +95,12 @@ const METRICS: MetricSpec[] = [
     unit: "ms",
     accessor: (point) => point.bottleneckQueuingDelayMs,
   },
+  {
+    id: "cwnd",
+    title: "Congestion Window",
+    unit: "bytes",
+    accessor: (point) => point.congestionWindowBytes,
+  },
 ];
 
 const SERIES_COLORS = [
@@ -415,7 +421,7 @@ export function EmulatedRunChartsPanel({
                 {totalSampleCount} total samples across selected child runs
               </p>
               <div
-                className="grid gap-5 lg:grid-cols-3"
+                className="grid gap-5 md:grid-cols-2 xl:grid-cols-4"
                 onMouseLeave={() => setHoveredMetricId(null)}
               >
                 {METRICS.map((metric) => (

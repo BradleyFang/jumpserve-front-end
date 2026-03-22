@@ -26,12 +26,22 @@ export type ParentRunIndexItem = EmulatedParentRun & {
 };
 
 export type AggregateDelayGraphPoint = {
+  parentRunId: number;
   numberOfClients: number;
   clientNumber: number;
   delayAddedMs: number;
-  averageFlowCompletionTimeMs: number | null;
+  flowCompletionTimeMs: number | null;
   averageThroughputMbps: number | null;
   runCount: number;
+};
+
+export type ParentRunIndexPage = {
+  parentRuns: ParentRunIndexItem[];
+  page: number;
+  pageSize: number;
+  totalPages: number;
+  totalCount: number;
+  hasMore: boolean;
 };
 
 function toNumber(value: NumericLike) {
@@ -256,51 +266,20 @@ export async function fetchLatestParentRunId() {
   return null;
 }
 
-export async function fetchParentRunsForIndex(): Promise<ParentRunIndexItem[]> {
-  const supabase = await createClient();
-  const batchSize = 1000;
-  let from = 0;
+type RawParentRunForIndex = {
+  id: number;
+  created_at: string;
+  snapshot_length_ms: NumericLike;
+  bottleneck_rate_megabit: NumericLike;
+  queue_buffer_size_kilobyte: NumericLike;
+};
 
-  type RawParentRun = {
-    id: number;
-    created_at: string;
-    snapshot_length_ms: NumericLike;
-    bottleneck_rate_megabit: NumericLike;
-    queue_buffer_size_kilobyte: NumericLike;
-  };
-
-  const rows: RawParentRun[] = [];
-
-  while (true) {
-    const { data, error } = await supabase
-      .from("emulated_parent_runs")
-      .select(
-        "id, created_at, snapshot_length_ms, bottleneck_rate_megabit, queue_buffer_size_kilobyte",
-      )
-      .order("created_at", { ascending: false })
-      .range(from, from + batchSize - 1);
-
-    if (error) {
-      throw new Error(
-        `Failed to load emulated_parent_runs: ${error.message}`,
-      );
-    }
-
-    const batch = ((data ?? []) as RawParentRun[]).map((row) => ({
-      id: row.id,
-      created_at: row.created_at,
-      snapshot_length_ms: row.snapshot_length_ms,
-      bottleneck_rate_megabit: row.bottleneck_rate_megabit,
-      queue_buffer_size_kilobyte: row.queue_buffer_size_kilobyte,
-    }));
-
-    rows.push(...batch);
-
-    if (batch.length < batchSize) {
-      break;
-    }
-
-    from += batchSize;
+async function buildParentRunIndexItems(
+  supabase: SupabaseClient,
+  rows: RawParentRunForIndex[],
+) {
+  if (rows.length === 0) {
+    return [];
   }
 
   const clientSummariesByParentRunId = new Map<
@@ -488,6 +467,69 @@ export async function fetchParentRunsForIndex(): Promise<ParentRunIndexItem[]> {
           : "No client runs",
     };
   });
+}
+
+async function fetchParentRunsForIndexPageWithClient(
+  supabase: SupabaseClient,
+  {
+    page,
+    pageSize,
+  }: {
+    page: number;
+    pageSize: number;
+  },
+): Promise<ParentRunIndexPage> {
+  const safePageSize = Math.max(1, Math.min(pageSize, 100));
+  const safePage = Math.max(1, page);
+  const safeOffset = (safePage - 1) * safePageSize;
+  const { data, error, count } = await supabase
+    .from("emulated_parent_runs")
+    .select(
+      "id, created_at, snapshot_length_ms, bottleneck_rate_megabit, queue_buffer_size_kilobyte",
+      { count: "exact" },
+    )
+    .order("created_at", { ascending: false })
+    .range(safeOffset, safeOffset + safePageSize - 1);
+
+  if (error) {
+    throw new Error(`Failed to load emulated_parent_runs: ${error.message}`);
+  }
+
+  const rows = ((data ?? []) as RawParentRunForIndex[]).map((row) => ({
+    id: row.id,
+    created_at: row.created_at,
+    snapshot_length_ms: row.snapshot_length_ms,
+    bottleneck_rate_megabit: row.bottleneck_rate_megabit,
+    queue_buffer_size_kilobyte: row.queue_buffer_size_kilobyte,
+  }));
+  const parentRuns = await buildParentRunIndexItems(supabase, rows);
+  const totalCount = count ?? 0;
+  const totalPages = Math.max(1, Math.ceil(totalCount / safePageSize));
+
+  return {
+    parentRuns,
+    page: Math.min(safePage, totalPages),
+    pageSize: safePageSize,
+    totalPages,
+    totalCount,
+    hasMore: safeOffset + parentRuns.length < totalCount,
+  };
+}
+
+export async function fetchParentRunsForIndexPage({
+  page = 1,
+  pageSize = 30,
+}: {
+  page?: number;
+  pageSize?: number;
+} = {}): Promise<ParentRunIndexPage> {
+  const supabase = await createClient();
+  return fetchParentRunsForIndexPageWithClient(supabase, { page, pageSize });
+}
+
+export async function fetchParentRunsForIndex(): Promise<ParentRunIndexItem[]> {
+  const { parentRuns } = await fetchParentRunsForIndexPage();
+  return parentRuns;
 }
 
 export async function fetchParentRunSummary(
@@ -934,7 +976,7 @@ export async function fetchAggregateDelayGraphData(): Promise<
   const { data, error } = await supabase
     .from("emulated_runs")
     .select(
-      "client_number, delay_added, flow_completion_time_ms, emulated_parent_runs(number_of_clients)",
+      "emulated_parent_run_id, client_number, delay_added, flow_completion_time_ms, emulated_parent_runs(number_of_clients)",
     )
     .order("delay_added", { ascending: true });
 
@@ -943,6 +985,7 @@ export async function fetchAggregateDelayGraphData(): Promise<
   }
 
   type RawAggregateRun = {
+    emulated_parent_run_id: number | null;
     client_number: number | null;
     delay_added: number | null;
     flow_completion_time_ms: number | null;
@@ -952,17 +995,7 @@ export async function fetchAggregateDelayGraphData(): Promise<
       | null;
   };
 
-  const buckets = new Map<
-    string,
-    {
-      numberOfClients: number;
-      clientNumber: number;
-      delayAddedMs: number;
-      runCount: number;
-      flowCompletionTimeMsTotal: number;
-      flowCompletionTimeMsCount: number;
-    }
-  >();
+  const points: AggregateDelayGraphPoint[] = [];
 
   for (const run of (data ?? []) as RawAggregateRun[]) {
     let numberOfClients: number | null = null;
@@ -973,6 +1006,7 @@ export async function fetchAggregateDelayGraphData(): Promise<
     }
 
     if (
+      run.emulated_parent_run_id === null ||
       run.delay_added === null ||
       numberOfClients === null ||
       run.client_number === null
@@ -980,52 +1014,30 @@ export async function fetchAggregateDelayGraphData(): Promise<
       continue;
     }
 
-    const bucketKey = `${numberOfClients}:${run.client_number}:${run.delay_added}`;
-    const bucket = buckets.get(bucketKey) ?? {
+    points.push({
+      parentRunId: run.emulated_parent_run_id,
       numberOfClients,
       clientNumber: run.client_number,
       delayAddedMs: run.delay_added,
-      runCount: 0,
-      flowCompletionTimeMsTotal: 0,
-      flowCompletionTimeMsCount: 0,
-    };
-
-    bucket.runCount += 1;
-
-    if (
-      run.flow_completion_time_ms !== null &&
-      run.flow_completion_time_ms > 0
-    ) {
-      bucket.flowCompletionTimeMsTotal += run.flow_completion_time_ms;
-      bucket.flowCompletionTimeMsCount += 1;
-    }
-
-    buckets.set(bucketKey, bucket);
+      flowCompletionTimeMs:
+        run.flow_completion_time_ms !== null && run.flow_completion_time_ms > 0
+          ? roundToHundredth(run.flow_completion_time_ms)
+          : null,
+      averageThroughputMbps: null,
+      runCount: 1,
+    });
   }
 
-  return Array.from(buckets.entries())
-    .sort((a, b) => {
-      const left = a[1];
-      const right = b[1];
+  return points.sort((left, right) => {
       if (left.numberOfClients !== right.numberOfClients) {
         return left.numberOfClients - right.numberOfClients;
       }
       if (left.clientNumber !== right.clientNumber) {
         return left.clientNumber - right.clientNumber;
       }
-      return left.delayAddedMs - right.delayAddedMs;
-    })
-    .map(([, bucket]) => ({
-      numberOfClients: bucket.numberOfClients,
-      clientNumber: bucket.clientNumber,
-      delayAddedMs: bucket.delayAddedMs,
-      averageFlowCompletionTimeMs:
-        bucket.flowCompletionTimeMsCount > 0
-          ? roundToHundredth(
-              bucket.flowCompletionTimeMsTotal / bucket.flowCompletionTimeMsCount,
-            )
-          : null,
-      averageThroughputMbps: null,
-      runCount: bucket.runCount,
-    }));
+      if (left.delayAddedMs !== right.delayAddedMs) {
+        return left.delayAddedMs - right.delayAddedMs;
+      }
+      return left.parentRunId - right.parentRunId;
+    });
 }
