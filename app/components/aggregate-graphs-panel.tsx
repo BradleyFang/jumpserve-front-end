@@ -103,6 +103,33 @@ type BoxPlotStat = {
   count: number;
 };
 
+type AvailableAggregateTest = {
+  parentRunId: number;
+  numberOfClients: number;
+  pointCount: number;
+  delayCount: number;
+  ccaLabels: string[];
+  workloadMegabytesValues: number[];
+  queueBufferSizeKilobyte: number | null;
+  bottleneckRateMegabit: number | null;
+  clientDetails: Array<{
+    clientNumber: number;
+    ccaLabels: string[];
+    delayValues: number[];
+    workloadMegabytesValues: number[];
+  }>;
+};
+
+type AggregateTestFilterState = {
+  selectedCcas: string[];
+  selectedWorkloads: number[];
+  selectedQueueBufferSizes: number[];
+};
+
+const AVAILABLE_CCA_FILTERS = ["bbr", "cubic"] as const;
+const AVAILABLE_WORKLOAD_FILTERS = [100, 200] as const;
+const AVAILABLE_QUEUE_BUFFER_FILTERS = [125, 500] as const;
+
 function roundToHundredth(value: number) {
   return Number(value.toFixed(2));
 }
@@ -144,6 +171,14 @@ function formatFlowCompletionTimeLabel(value: number) {
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
+}
+
+function addAxisHeadroom(maxValue: number) {
+  if (!Number.isFinite(maxValue) || maxValue <= 0) {
+    return 1;
+  }
+
+  return maxValue * 1.1;
 }
 
 function buildLinearTicks(maxValue: number, tickCount = 6) {
@@ -547,6 +582,59 @@ function EmptyChartState({ text }: { text: string }) {
   );
 }
 
+function aggregateTestMatchesFilters(
+  test: AvailableAggregateTest,
+  filters: AggregateTestFilterState,
+) {
+  if (
+    filters.selectedCcas.length > 0 &&
+    !filters.selectedCcas.some((cca) => test.ccaLabels.includes(cca))
+  ) {
+    return false;
+  }
+
+  if (
+    filters.selectedWorkloads.length > 0 &&
+    !filters.selectedWorkloads.some((workload) =>
+      test.workloadMegabytesValues.includes(workload),
+    )
+  ) {
+    return false;
+  }
+
+  if (
+    filters.selectedQueueBufferSizes.length > 0 &&
+    (test.queueBufferSizeKilobyte === null ||
+      !filters.selectedQueueBufferSizes.includes(test.queueBufferSizeKilobyte))
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+function filterAggregateTests(
+  tests: AvailableAggregateTest[],
+  filters: AggregateTestFilterState,
+) {
+  return tests.filter((test) => aggregateTestMatchesFilters(test, filters));
+}
+
+function formatMultiSelectSummary(
+  values: string[],
+  emptyLabel = "",
+) {
+  return values.length > 0 ? values.join(", ") : emptyLabel;
+}
+
+function formatCommaSeparatedValues(
+  values: number[],
+  formatter: (value: number) => string,
+  emptyLabel = "n/a",
+) {
+  return values.length > 0 ? values.map(formatter).join(", ") : emptyLabel;
+}
+
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 function ScatterPlot({
   points,
@@ -769,19 +857,16 @@ function ParentRunConnectionChart({
     );
   }
 
-  const delays = Array.from(
-    new Set(filteredPoints.map((point) => point.delayAddedMs)),
-  ).sort((a, b) => a - b);
-  const maxDelay = Math.max(...delays, 1);
+  const maxDelay = Math.max(...filteredPoints.map((point) => point.delayAddedMs), 0);
   const maxFlowCompletion = Math.max(
     ...filteredPoints.map((point) => point.flowCompletionTimeMs),
-    1,
+    0,
   );
   const baseDomain = {
     xMin: 0,
-    xMax: Math.max(maxDelay, 1),
+    xMax: addAxisHeadroom(maxDelay),
     yMin: 0,
-    yMax: Math.max(maxFlowCompletion, 1),
+    yMax: addAxisHeadroom(maxFlowCompletion),
   };
   const activeDomain = zoomDomain
     ? {
@@ -2515,59 +2600,280 @@ export function AggregateGraphsPanel({
 }: {
   data: AggregateDelayGraphPoint[];
 }) {
-  const availableClientCounts = useMemo(
-    () =>
-      Array.from(new Set(data.map((point) => point.numberOfClients))).sort(
-        (a, b) => a - b,
-      ),
-    [data],
-  );
-  const [selectedClientCountState, setSelectedClientCount] = useState<number>(
-    availableClientCounts[0] ?? 2,
-  );
-  const [hiddenClientNumbers, setHiddenClientNumbers] = useState<number[]>([]);
-  const selectedClientCount = availableClientCounts.includes(
-    selectedClientCountState,
-  )
-    ? selectedClientCountState
-    : (availableClientCounts[0] ?? 2);
-
+  const testModalTitleId = useId().replace(/:/g, "");
   const flowPoints = useMemo(
     () =>
       data
-        .filter((point) => point.numberOfClients === selectedClientCount)
         .filter(
           (point): point is FlowPoint =>
             point.flowCompletionTimeMs !== null &&
             Number.isFinite(point.flowCompletionTimeMs),
         ),
-    [data, selectedClientCount],
+    [data],
   );
-  const clientSeries = useMemo(() => {
-    const clientNumbers = Array.from(
-      new Set(flowPoints.map((point) => point.clientNumber)),
-    ).sort((a, b) => a - b);
+  const availableTests = useMemo(
+    () =>
+      Array.from(
+        flowPoints.reduce(
+          (tests, point) => {
+            const existing = tests.get(point.parentRunId);
 
-    return clientNumbers.map((clientNumber, index) => ({
-      clientNumber,
-      color: SERIES_COLORS[index % SERIES_COLORS.length],
-      label: `Client ${clientNumber}`,
-    }));
-  }, [flowPoints]);
-  const visibleHiddenClientNumbers = useMemo(() => {
-    const validClientNumbers = new Set(
-      clientSeries.map((entry) => entry.clientNumber),
-    );
+            if (existing) {
+              existing.pointCount += 1;
+              existing.delayValues.add(point.delayAddedMs);
+              if (point.congestionControlAlgorithmName) {
+                existing.ccaLabels.add(
+                  point.congestionControlAlgorithmName.toLowerCase(),
+                );
+              }
+              if (point.clientFileSizeMegabytes !== null) {
+                existing.workloadMegabytesValues.add(point.clientFileSizeMegabytes);
+              }
+              if (existing.queueBufferSizeKilobyte === null) {
+                existing.queueBufferSizeKilobyte = point.queueBufferSizeKilobyte;
+              }
+              if (existing.bottleneckRateMegabit === null) {
+                existing.bottleneckRateMegabit = point.bottleneckRateMegabit;
+              }
+              const existingClientDetail =
+                existing.clientDetails.get(point.clientNumber);
 
-    return hiddenClientNumbers.filter((clientNumber) =>
-      validClientNumbers.has(clientNumber),
-    );
-  }, [clientSeries, hiddenClientNumbers]);
+              if (existingClientDetail) {
+                existingClientDetail.delayValues.add(point.delayAddedMs);
+                if (point.congestionControlAlgorithmName) {
+                  existingClientDetail.ccaLabels.add(
+                    point.congestionControlAlgorithmName.toLowerCase(),
+                  );
+                }
+                if (point.clientFileSizeMegabytes !== null) {
+                  existingClientDetail.workloadMegabytesValues.add(
+                    point.clientFileSizeMegabytes,
+                  );
+                }
+              } else {
+                existing.clientDetails.set(point.clientNumber, {
+                  clientNumber: point.clientNumber,
+                  ccaLabels: new Set(
+                    point.congestionControlAlgorithmName
+                      ? [point.congestionControlAlgorithmName.toLowerCase()]
+                      : [],
+                  ),
+                  delayValues: new Set([point.delayAddedMs]),
+                  workloadMegabytesValues: new Set(
+                    point.clientFileSizeMegabytes !== null
+                      ? [point.clientFileSizeMegabytes]
+                      : [],
+                  ),
+                });
+              }
 
-  const visiblePoints = flowPoints.filter(
-    (point) => !visibleHiddenClientNumbers.includes(point.clientNumber),
+              return tests;
+            }
+
+            tests.set(point.parentRunId, {
+              parentRunId: point.parentRunId,
+              numberOfClients: point.numberOfClients,
+              pointCount: 1,
+              delayValues: new Set([point.delayAddedMs]),
+              ccaLabels: new Set(
+                point.congestionControlAlgorithmName
+                  ? [point.congestionControlAlgorithmName.toLowerCase()]
+                  : [],
+              ),
+              workloadMegabytesValues: new Set(
+                point.clientFileSizeMegabytes !== null
+                  ? [point.clientFileSizeMegabytes]
+                  : [],
+              ),
+              queueBufferSizeKilobyte: point.queueBufferSizeKilobyte,
+              bottleneckRateMegabit: point.bottleneckRateMegabit,
+              clientDetails: new Map([
+                [
+                  point.clientNumber,
+                  {
+                    clientNumber: point.clientNumber,
+                    ccaLabels: new Set(
+                      point.congestionControlAlgorithmName
+                        ? [point.congestionControlAlgorithmName.toLowerCase()]
+                        : [],
+                    ),
+                    delayValues: new Set([point.delayAddedMs]),
+                    workloadMegabytesValues: new Set(
+                      point.clientFileSizeMegabytes !== null
+                        ? [point.clientFileSizeMegabytes]
+                        : [],
+                    ),
+                  },
+                ],
+              ]),
+            });
+
+            return tests;
+          },
+          new Map<
+            number,
+            {
+              parentRunId: number;
+              numberOfClients: number;
+              pointCount: number;
+              delayValues: Set<number>;
+              ccaLabels: Set<string>;
+              workloadMegabytesValues: Set<number>;
+              queueBufferSizeKilobyte: number | null;
+              bottleneckRateMegabit: number | null;
+              clientDetails: Map<
+                number,
+                {
+                  clientNumber: number;
+                  ccaLabels: Set<string>;
+                  delayValues: Set<number>;
+                  workloadMegabytesValues: Set<number>;
+                }
+              >;
+            }
+          >(),
+        ),
+      )
+        .map(([, test]) => ({
+          parentRunId: test.parentRunId,
+          numberOfClients: test.numberOfClients,
+          pointCount: test.pointCount,
+          delayCount: test.delayValues.size,
+          ccaLabels: Array.from(test.ccaLabels).sort((a, b) =>
+            a.localeCompare(b),
+          ),
+          workloadMegabytesValues: Array.from(
+            test.workloadMegabytesValues,
+          ).sort((a, b) => a - b),
+          queueBufferSizeKilobyte: test.queueBufferSizeKilobyte,
+          bottleneckRateMegabit: test.bottleneckRateMegabit,
+          clientDetails: Array.from(test.clientDetails.values())
+            .map((clientDetail) => ({
+              clientNumber: clientDetail.clientNumber,
+              ccaLabels: Array.from(clientDetail.ccaLabels).sort((a, b) =>
+                a.localeCompare(b),
+              ),
+              delayValues: Array.from(clientDetail.delayValues).sort(
+                (a, b) => a - b,
+              ),
+              workloadMegabytesValues: Array.from(
+                clientDetail.workloadMegabytesValues,
+              ).sort((a, b) => a - b),
+            }))
+            .sort((left, right) => left.clientNumber - right.clientNumber),
+        }))
+        .sort((left, right) => right.parentRunId - left.parentRunId),
+    [flowPoints],
   );
-  const totalRuns = flowPoints.length;
+  const [selectedCcas, setSelectedCcas] = useState<string[]>([]);
+  const [selectedWorkloads, setSelectedWorkloads] = useState<number[]>([]);
+  const [selectedQueueBufferSizes, setSelectedQueueBufferSizes] = useState<
+    number[]
+  >([]);
+  const filterState = useMemo(
+    () => ({
+      selectedCcas,
+      selectedWorkloads,
+      selectedQueueBufferSizes,
+    }),
+    [selectedCcas, selectedQueueBufferSizes, selectedWorkloads],
+  );
+  const filteredAvailableTests = useMemo(
+    () => filterAggregateTests(availableTests, filterState),
+    [availableTests, filterState],
+  );
+  const availableTestIds = useMemo(
+    () => availableTests.map((test) => test.parentRunId),
+    [availableTests],
+  );
+  const filteredAvailableTestIds = useMemo(
+    () => filteredAvailableTests.map((test) => test.parentRunId),
+    [filteredAvailableTests],
+  );
+  const [isTestModalOpen, setIsTestModalOpen] = useState(false);
+  const [selectedTestIds, setSelectedTestIds] = useState<number[]>(
+    availableTestIds,
+  );
+  const visibleSelectedTestIds = selectedTestIds.filter((parentRunId) =>
+    availableTestIds.includes(parentRunId),
+  );
+  const filteredFlowPoints = useMemo(
+    () =>
+      flowPoints.filter((point) =>
+        visibleSelectedTestIds.includes(point.parentRunId),
+      ),
+    [flowPoints, visibleSelectedTestIds],
+  );
+  const totalSelectedTests = useMemo(
+    () => new Set(filteredFlowPoints.map((point) => point.parentRunId)).size,
+    [filteredFlowPoints],
+  );
+  const selectedTestCountLabel = `${visibleSelectedTestIds.length} ${
+    visibleSelectedTestIds.length === 1 ? "test" : "tests"
+  } selected`;
+  const allTestsSelected =
+    filteredAvailableTestIds.length > 0 &&
+    filteredAvailableTestIds.every((testId) => visibleSelectedTestIds.includes(testId));
+
+  const ccaOptionCounts = useMemo(
+    () =>
+      new Map(
+        AVAILABLE_CCA_FILTERS.map((cca) => [
+          cca,
+          filterAggregateTests(availableTests, {
+            ...filterState,
+            selectedCcas: [cca],
+          }).length,
+        ]),
+      ),
+    [availableTests, filterState],
+  );
+  const workloadOptionCounts = useMemo(
+    () =>
+      new Map(
+        AVAILABLE_WORKLOAD_FILTERS.map((workload) => [
+          workload,
+          filterAggregateTests(availableTests, {
+            ...filterState,
+            selectedWorkloads: [workload],
+          }).length,
+        ]),
+      ),
+    [availableTests, filterState],
+  );
+  const queueBufferOptionCounts = useMemo(
+    () =>
+      new Map(
+        AVAILABLE_QUEUE_BUFFER_FILTERS.map((queueBufferSize) => [
+          queueBufferSize,
+          filterAggregateTests(availableTests, {
+            ...filterState,
+            selectedQueueBufferSizes: [queueBufferSize],
+          }).length,
+        ]),
+      ),
+    [availableTests, filterState],
+  );
+
+  function toggleTestSelection(parentRunId: number) {
+    setSelectedTestIds((current) =>
+      current.includes(parentRunId)
+        ? current.filter((id) => id !== parentRunId)
+        : [...current, parentRunId].sort((left, right) => right - left),
+    );
+  }
+
+  function toggleAllTests() {
+    setSelectedTestIds((current) => {
+      if (allTestsSelected) {
+        return current.filter((testId) => !filteredAvailableTestIds.includes(testId));
+      }
+
+      return Array.from(new Set([...current, ...filteredAvailableTestIds])).sort(
+        (left, right) => right - left,
+      );
+    });
+  }
 
   return (
     <main className="space-atmosphere relative min-h-screen overflow-hidden p-5 sm:p-10">
@@ -2583,6 +2889,10 @@ export function AggregateGraphsPanel({
               </h1>
               <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
                 Focused view of connected client lines across aggregate runs.
+              </p>
+              <p className="mt-3 text-sm text-slate-600 dark:text-slate-300">
+                Showing {filteredFlowPoints.length} plotted parent-run/client
+                points across {totalSelectedTests} selected tests.
               </p>
             </div>
             <Link
@@ -2610,121 +2920,371 @@ export function AggregateGraphsPanel({
             <aside className="rounded-[1.75rem] border border-rose-200/80 bg-[#fff3f8] p-4 shadow-inner dark:border-slate-600 dark:bg-slate-900/60 sm:p-5">
               <div className="rounded-2xl border border-rose-200/80 bg-[#fff8fc] p-4 dark:border-slate-600 dark:bg-slate-800/55">
                 <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500 dark:text-slate-400">
-                  Number of Clients
+                  Test Selection
                 </p>
-                <div
-                  className="mt-3 flex flex-col gap-2"
-                  role="radiogroup"
-                  aria-label="Client count"
+                <button
+                  type="button"
+                  onClick={() => setIsTestModalOpen(true)}
+                  className="mt-3 w-full rounded-xl border border-rose-300/80 bg-white px-3 py-2 text-sm font-medium text-slate-800 transition hover:border-rose-400 hover:bg-rose-50 dark:border-slate-500 dark:bg-slate-700/80 dark:text-slate-100 dark:hover:border-slate-400 dark:hover:bg-slate-700"
                 >
-                  {availableClientCounts.map((count) => (
-                    <FilterOptionButton
-                      key={count}
-                      label={`${count} clients`}
-                      selected={selectedClientCount === count}
-                      onClick={() => setSelectedClientCount(count)}
-                    />
-                  ))}
-                </div>
-              </div>
-
-              <div className="mt-4 rounded-2xl border border-rose-200/80 bg-[#fff8fc] p-4 dark:border-slate-600 dark:bg-slate-800/55">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500 dark:text-slate-400">
-                  Series Visibility
-                </p>
-                <div className="mt-3 flex flex-col gap-2">
-                  {clientSeries.map((entry) => {
-                    const isHidden = hiddenClientNumbers.includes(
-                      entry.clientNumber,
-                    ) && visibleHiddenClientNumbers.includes(entry.clientNumber);
-
-                    return (
-                      <button
-                        key={entry.clientNumber}
-                        type="button"
-                        onClick={() =>
-                          setHiddenClientNumbers((current) =>
-                            current.includes(entry.clientNumber)
-                              ? current.filter(
-                                  (clientNumber) =>
-                                    clientNumber !== entry.clientNumber,
-                                )
-                              : [...current, entry.clientNumber],
-                          )
-                        }
-                        className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-left text-sm transition ${
-                          isHidden
-                            ? "border-rose-200/70 bg-[#fff3f8] text-slate-500 opacity-60 dark:border-slate-600 dark:bg-slate-800/45 dark:text-slate-300"
-                            : "border-rose-300/80 bg-white text-slate-800 hover:border-rose-400 dark:border-slate-500 dark:bg-slate-700/80 dark:text-slate-100 dark:hover:border-slate-400"
-                        }`}
-                      >
-                        <span
-                          className="inline-block h-2.5 w-2.5 rounded-full"
-                          style={{ backgroundColor: entry.color }}
-                        />
-                        <span className={isHidden ? "line-through" : undefined}>
-                          {entry.label}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div className="mt-4 rounded-2xl border border-rose-200/80 bg-[#fff8fc] p-4 dark:border-slate-600 dark:bg-slate-800/55">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500 dark:text-slate-400">
-                  This View
-                </p>
+                  Select Available Tests
+                </button>
                 <p className="mt-3 text-sm text-slate-600 dark:text-slate-300">
-                  {flowPoints.length} plotted parent-run/client points across{" "}
-                  {totalRuns} runs.
-                </p>
-                <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
-                  Hidden clients apply to the connected client lines chart.
+                  {selectedTestCountLabel}
                 </p>
               </div>
             </aside>
 
             <div className="space-y-6">
-              <ChartCard
-                eyebrow="Parent Runs"
-                title="Connected Client Lines"
-                subtitle="Every parent run is shown on one plot with added delay on the x axis. Each run gets its own color, and that run's client points are connected directly."
-              >
-                <ParentRunConnectionChart
-                  points={visiblePoints}
-                />
-              </ChartCard>
+              {filteredFlowPoints.length > 0 ? (
+                <ChartCard
+                  eyebrow="Parent Runs"
+                  title="Connected Client Lines"
+                  subtitle="Every parent run is shown on one plot with added delay on the x axis. Each run gets its own color, and that run's client points are connected directly."
+                >
+                  <ParentRunConnectionChart points={filteredFlowPoints} />
+                </ChartCard>
+              ) : (
+                <ChartCard
+                  eyebrow="Test Selection"
+                  title="No Tests Selected"
+                  subtitle="Open the test selector to choose one or more parent runs to include in the aggregate graph."
+                >
+                  <EmptyChartState text="No tests are currently selected." />
+                </ChartCard>
+              )}
             </div>
           </div>
         </section>
       </div>
-    </main>
-  );
-}
 
-function FilterOptionButton({
-  label,
-  onClick,
-  selected = false,
-}: {
-  label: string;
-  onClick?: () => void;
-  selected?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      role="radio"
-      aria-checked={selected}
-      onClick={onClick}
-      className={`w-full rounded-xl border px-3 py-2 text-left text-sm transition ${
-        selected
-          ? "border-rose-400 bg-rose-50 text-slate-900 shadow-sm dark:border-slate-400 dark:bg-slate-700/90 dark:text-slate-100"
-          : "border-rose-200/80 bg-[#fff3f8] text-slate-700 hover:border-rose-300 dark:border-slate-600 dark:bg-slate-800/50 dark:text-slate-200 dark:hover:border-slate-500"
-      }`}
-    >
-      {label}
-    </button>
+      {isTestModalOpen ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4"
+          onClick={() => setIsTestModalOpen(false)}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={testModalTitleId}
+            className="flex max-h-[80vh] w-full max-w-4xl flex-col overflow-hidden rounded-[1.75rem] border border-rose-200/80 bg-[#fff8fc] p-6 shadow-2xl dark:border-slate-600 dark:bg-slate-800"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="shrink-0 flex items-start justify-between gap-4">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500 dark:text-slate-400">
+                  Aggregate Tests
+                </p>
+                <h2
+                  id={testModalTitleId}
+                  className="mt-2 text-2xl font-semibold text-slate-900 dark:text-slate-100"
+                >
+                  Select Available Tests
+                </h2>
+                <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
+                  {`${filteredAvailableTests.length} tests available`}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsTestModalOpen(false)}
+                className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-rose-300/80 bg-white text-slate-700 transition hover:border-rose-400 hover:bg-rose-50 dark:border-slate-500 dark:bg-slate-700 dark:text-slate-100 dark:hover:border-slate-400"
+                aria-label="Close test selection modal"
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  className="h-5 w-5"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.9"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M6 6l12 12" />
+                  <path d="M18 6 6 18" />
+                </svg>
+              </button>
+            </div>
+
+            <div className="mt-5 grid min-h-0 flex-1 gap-5 lg:grid-cols-[240px_minmax(0,1fr)]">
+              <aside className="min-h-0 overflow-y-auto rounded-2xl border border-rose-200/80 bg-[#fff3f8] p-4 dark:border-slate-600 dark:bg-slate-900/55">
+                <div>
+                  <details className="group">
+                    <summary className="flex cursor-pointer list-none items-center justify-between rounded-2xl border border-rose-300/80 bg-white px-3 py-2 text-sm text-slate-700 transition hover:border-rose-400 dark:border-slate-500 dark:bg-slate-900/75 dark:text-slate-100">
+                      <span className="min-h-4 flex-1 pr-2">
+                        <span className="block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
+                          CCA
+                        </span>
+                        <span className="mt-1 block truncate">
+                          {formatMultiSelectSummary(
+                            selectedCcas.map((cca) => cca.toUpperCase()),
+                          )}
+                        </span>
+                      </span>
+                      <span className="ml-2 flex h-5 w-5 items-center justify-center rounded-full bg-rose-50 dark:bg-slate-800">
+                        <span className="h-2.5 w-2.5 rotate-45 border-b-2 border-r-2 border-slate-500 transition group-open:rotate-[225deg] dark:border-slate-300" />
+                      </span>
+                    </summary>
+                    <div className="mt-2 space-y-1 rounded-2xl border border-rose-200/80 bg-white p-2.5 dark:border-slate-600 dark:bg-slate-900/50">
+                      {AVAILABLE_CCA_FILTERS.map((cca) => (
+                        <label
+                          key={cca}
+                          className="flex cursor-pointer items-center justify-between gap-3 rounded-xl px-2 py-1.5 text-xs text-slate-700 transition hover:bg-rose-50/90 dark:text-slate-100 dark:hover:bg-slate-700/60"
+                        >
+                          <span className="flex min-w-0 items-center gap-2">
+                            <input
+                              type="checkbox"
+                              checked={selectedCcas.includes(cca)}
+                              onChange={(event) =>
+                                setSelectedCcas((current) =>
+                                  event.target.checked
+                                    ? current.includes(cca)
+                                      ? current
+                                      : [...current, cca]
+                                    : current.filter((value) => value !== cca),
+                                )
+                              }
+                              className="h-3.5 w-3.5 rounded border-rose-400 text-teal-700 focus:ring-teal-500 dark:border-slate-400"
+                            />
+                            <span className="truncate uppercase">{cca}</span>
+                          </span>
+                          <span className="rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[10px] font-semibold tracking-[0.08em] text-rose-700 dark:border-slate-500 dark:bg-slate-800 dark:text-slate-200">
+                            {ccaOptionCounts.get(cca) ?? 0}
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                  </details>
+                </div>
+
+                <div className="mt-4">
+                  <details className="group">
+                    <summary className="flex cursor-pointer list-none items-center justify-between rounded-2xl border border-rose-300/80 bg-white px-3 py-2 text-sm text-slate-700 transition hover:border-rose-400 dark:border-slate-500 dark:bg-slate-900/75 dark:text-slate-100">
+                      <span className="min-h-4 flex-1 pr-2">
+                        <span className="block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
+                          Workload
+                        </span>
+                        <span className="mt-1 block truncate">
+                          {formatMultiSelectSummary(
+                            selectedWorkloads.map((workload) => `${workload}MB`),
+                          )}
+                        </span>
+                      </span>
+                      <span className="ml-2 flex h-5 w-5 items-center justify-center rounded-full bg-rose-50 dark:bg-slate-800">
+                        <span className="h-2.5 w-2.5 rotate-45 border-b-2 border-r-2 border-slate-500 transition group-open:rotate-[225deg] dark:border-slate-300" />
+                      </span>
+                    </summary>
+                    <div className="mt-2 space-y-1 rounded-2xl border border-rose-200/80 bg-white p-2.5 dark:border-slate-600 dark:bg-slate-900/50">
+                      {AVAILABLE_WORKLOAD_FILTERS.map((workload) => (
+                        <label
+                          key={workload}
+                          className="flex cursor-pointer items-center justify-between gap-3 rounded-xl px-2 py-1.5 text-xs text-slate-700 transition hover:bg-rose-50/90 dark:text-slate-100 dark:hover:bg-slate-700/60"
+                        >
+                          <span className="flex min-w-0 items-center gap-2">
+                            <input
+                              type="checkbox"
+                              checked={selectedWorkloads.includes(workload)}
+                              onChange={(event) =>
+                                setSelectedWorkloads((current) =>
+                                  event.target.checked
+                                    ? current.includes(workload)
+                                      ? current
+                                      : [...current, workload].sort(
+                                          (a, b) => a - b,
+                                        )
+                                    : current.filter((value) => value !== workload),
+                                )
+                              }
+                              className="h-3.5 w-3.5 rounded border-rose-400 text-teal-700 focus:ring-teal-500 dark:border-slate-400"
+                            />
+                            <span className="truncate">{`${workload}MB`}</span>
+                          </span>
+                          <span className="rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[10px] font-semibold tracking-[0.08em] text-rose-700 dark:border-slate-500 dark:bg-slate-800 dark:text-slate-200">
+                            {workloadOptionCounts.get(workload) ?? 0}
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                  </details>
+                </div>
+
+                <div className="mt-4">
+                  <details className="group">
+                    <summary className="flex cursor-pointer list-none items-center justify-between rounded-2xl border border-rose-300/80 bg-white px-3 py-2 text-sm text-slate-700 transition hover:border-rose-400 dark:border-slate-500 dark:bg-slate-900/75 dark:text-slate-100">
+                      <span className="min-h-4 flex-1 pr-2">
+                        <span className="block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
+                          Queue Buffer Size
+                        </span>
+                        <span className="mt-1 block truncate">
+                          {formatMultiSelectSummary(
+                            selectedQueueBufferSizes.map(
+                              (queueBufferSize) => `${queueBufferSize}KB`,
+                            ),
+                          )}
+                        </span>
+                      </span>
+                      <span className="ml-2 flex h-5 w-5 items-center justify-center rounded-full bg-rose-50 dark:bg-slate-800">
+                        <span className="h-2.5 w-2.5 rotate-45 border-b-2 border-r-2 border-slate-500 transition group-open:rotate-[225deg] dark:border-slate-300" />
+                      </span>
+                    </summary>
+                    <div className="mt-2 space-y-1 rounded-2xl border border-rose-200/80 bg-white p-2.5 dark:border-slate-600 dark:bg-slate-900/50">
+                      {AVAILABLE_QUEUE_BUFFER_FILTERS.map((queueBufferSize) => (
+                        <label
+                          key={queueBufferSize}
+                          className="flex cursor-pointer items-center justify-between gap-3 rounded-xl px-2 py-1.5 text-xs text-slate-700 transition hover:bg-rose-50/90 dark:text-slate-100 dark:hover:bg-slate-700/60"
+                        >
+                          <span className="flex min-w-0 items-center gap-2">
+                            <input
+                              type="checkbox"
+                              checked={selectedQueueBufferSizes.includes(
+                                queueBufferSize,
+                              )}
+                              onChange={(event) =>
+                                setSelectedQueueBufferSizes((current) =>
+                                  event.target.checked
+                                    ? current.includes(queueBufferSize)
+                                      ? current
+                                      : [...current, queueBufferSize].sort(
+                                          (a, b) => a - b,
+                                        )
+                                    : current.filter(
+                                        (value) => value !== queueBufferSize,
+                                      ),
+                                )
+                              }
+                              className="h-3.5 w-3.5 rounded border-rose-400 text-teal-700 focus:ring-teal-500 dark:border-slate-400"
+                            />
+                            <span className="truncate">{`${queueBufferSize}KB`}</span>
+                          </span>
+                          <span className="rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[10px] font-semibold tracking-[0.08em] text-rose-700 dark:border-slate-500 dark:bg-slate-800 dark:text-slate-200">
+                            {queueBufferOptionCounts.get(queueBufferSize) ?? 0}
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                  </details>
+                </div>
+              </aside>
+
+              <div className="min-h-0 overflow-y-auto rounded-2xl border border-rose-200/80 bg-white dark:border-slate-600 dark:bg-slate-900/45">
+                <div className="border-b border-rose-200/80 px-4 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:border-slate-600 dark:text-slate-400">
+                  Parent Run
+                </div>
+                {filteredAvailableTests.length > 0 ? (
+                  filteredAvailableTests.map((test, index) => {
+                    const isSelected = visibleSelectedTestIds.includes(
+                      test.parentRunId,
+                    );
+                    const previousSelected =
+                      index > 0 &&
+                      visibleSelectedTestIds.includes(
+                        filteredAvailableTests[index - 1].parentRunId,
+                      );
+                    const nextSelected =
+                      index < filteredAvailableTests.length - 1 &&
+                      visibleSelectedTestIds.includes(
+                        filteredAvailableTests[index + 1].parentRunId,
+                      );
+
+                    return (
+                      <button
+                        key={test.parentRunId}
+                        type="button"
+                        onClick={() => toggleTestSelection(test.parentRunId)}
+                        className={`block w-full cursor-pointer px-4 py-3 text-left text-sm transition ${
+                          isSelected
+                            ? `border-x border-rose-300 bg-rose-100 text-slate-900 dark:border-slate-400 dark:bg-slate-700/70 dark:text-slate-100 ${
+                                previousSelected
+                                  ? "border-t-0"
+                                  : "rounded-t-xl border-t"
+                              } ${
+                                nextSelected
+                                  ? "border-b-0"
+                                  : "rounded-b-xl border-b"
+                              }`
+                            : "border-b border-rose-100/80 bg-white text-slate-700 hover:bg-rose-50/70 dark:border-slate-700/80 dark:bg-slate-900/20 dark:text-slate-200 dark:hover:bg-slate-800/60"
+                        }`}
+                      >
+                        <span className="block min-w-0">
+                          <span className="block font-semibold">
+                            {`${test.parentRunId} | Queue buffer: ${
+                              test.queueBufferSizeKilobyte === null
+                                ? "n/a"
+                                : `${formatAxisValue(test.queueBufferSizeKilobyte)}KB`
+                            } | Bottleneck rate: ${
+                              test.bottleneckRateMegabit === null
+                                ? "n/a"
+                                : `${formatAxisValue(test.bottleneckRateMegabit)} mbit`
+                            }`}
+                          </span>
+                          <span className="mt-1 block text-xs text-slate-600 dark:text-slate-300">
+                            {test.clientDetails.length > 0
+                              ? test.clientDetails
+                                  .map(
+                                    (clientDetail) =>
+                                      `${
+                                        clientDetail.ccaLabels.length > 0
+                                          ? clientDetail.ccaLabels
+                                              .map((cca) => cca.toUpperCase())
+                                              .join(", ")
+                                          : "n/a"
+                                      }, ${formatCommaSeparatedValues(
+                                        clientDetail.delayValues,
+                                        (delayValue) =>
+                                          `${formatAxisValue(delayValue)} ms`,
+                                      )}, ${formatCommaSeparatedValues(
+                                        clientDetail.workloadMegabytesValues,
+                                        (workload) => `${workload}MB`,
+                                      )}`,
+                                  )
+                                  .join(" | ")
+                              : "No client configuration available"}
+                          </span>
+                        </span>
+                      </button>
+                    );
+                  })
+                ) : (
+                  <div className="flex h-40 items-center justify-center px-6 text-sm text-slate-500 dark:text-slate-300">
+                    No tests match the current filters.
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="mt-5 shrink-0 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="text-sm text-slate-600 dark:text-slate-300">
+                  {selectedTestCountLabel}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setSelectedTestIds([])}
+                  className="rounded-xl border border-rose-200/80 bg-white px-3 py-2 text-sm text-slate-700 transition hover:border-rose-300 hover:bg-rose-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-100 dark:hover:border-slate-500"
+                >
+                  Deselect All
+                </button>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={toggleAllTests}
+                  className="rounded-xl border border-rose-200/80 bg-white px-3 py-2 text-sm text-slate-700 transition hover:border-rose-300 hover:bg-rose-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-100 dark:hover:border-slate-500"
+                >
+                  Select All
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsTestModalOpen(false)}
+                  className="rounded-xl border border-rose-300/80 bg-rose-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-rose-600 dark:border-rose-400"
+                >
+                  Done
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </main>
   );
 }

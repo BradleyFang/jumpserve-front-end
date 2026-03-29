@@ -33,6 +33,10 @@ export type AggregateDelayGraphPoint = {
   flowCompletionTimeMs: number | null;
   averageThroughputMbps: number | null;
   runCount: number;
+  congestionControlAlgorithmName: string | null;
+  clientFileSizeMegabytes: number | null;
+  queueBufferSizeKilobyte: number | null;
+  bottleneckRateMegabit: number | null;
 };
 
 export type ParentRunIndexPage = {
@@ -976,7 +980,7 @@ export async function fetchAggregateDelayGraphData(): Promise<
   const { data, error } = await supabase
     .from("emulated_runs")
     .select(
-      "emulated_parent_run_id, client_number, delay_added, flow_completion_time_ms, emulated_parent_runs(number_of_clients)",
+      "emulated_parent_run_id, client_number, delay_added, flow_completion_time_ms, client_file_size_megabytes, congestion_control_algorithms(name), emulated_parent_runs(number_of_clients, queue_buffer_size_kilobyte, bottleneck_rate_megabit)",
     )
     .order("delay_added", { ascending: true });
 
@@ -989,9 +993,22 @@ export async function fetchAggregateDelayGraphData(): Promise<
     client_number: number | null;
     delay_added: number | null;
     flow_completion_time_ms: number | null;
+    client_file_size_megabytes: NumericLike;
+    congestion_control_algorithms:
+      | { name: string | null }
+      | Array<{ name: string | null }>
+      | null;
     emulated_parent_runs:
-      | { number_of_clients: number | null }
-      | Array<{ number_of_clients: number | null }>
+      | {
+          number_of_clients: number | null;
+          queue_buffer_size_kilobyte: NumericLike;
+          bottleneck_rate_megabit: NumericLike;
+        }
+      | Array<{
+          number_of_clients: number | null;
+          queue_buffer_size_kilobyte: NumericLike;
+          bottleneck_rate_megabit: NumericLike;
+        }>
       | null;
   };
 
@@ -999,10 +1016,32 @@ export async function fetchAggregateDelayGraphData(): Promise<
 
   for (const run of (data ?? []) as RawAggregateRun[]) {
     let numberOfClients: number | null = null;
+    let queueBufferSizeKilobyte: number | null = null;
+    let bottleneckRateMegabit: number | null = null;
     if (Array.isArray(run.emulated_parent_runs)) {
       numberOfClients = run.emulated_parent_runs[0]?.number_of_clients ?? null;
+      queueBufferSizeKilobyte = toNumber(
+        run.emulated_parent_runs[0]?.queue_buffer_size_kilobyte ?? null,
+      );
+      bottleneckRateMegabit = toNumber(
+        run.emulated_parent_runs[0]?.bottleneck_rate_megabit ?? null,
+      );
     } else if (run.emulated_parent_runs) {
       numberOfClients = run.emulated_parent_runs.number_of_clients;
+      queueBufferSizeKilobyte = toNumber(
+        run.emulated_parent_runs.queue_buffer_size_kilobyte,
+      );
+      bottleneckRateMegabit = toNumber(
+        run.emulated_parent_runs.bottleneck_rate_megabit,
+      );
+    }
+
+    let congestionControlAlgorithmName: string | null = null;
+    if (Array.isArray(run.congestion_control_algorithms)) {
+      congestionControlAlgorithmName =
+        run.congestion_control_algorithms[0]?.name ?? null;
+    } else if (run.congestion_control_algorithms) {
+      congestionControlAlgorithmName = run.congestion_control_algorithms.name;
     }
 
     if (
@@ -1025,6 +1064,10 @@ export async function fetchAggregateDelayGraphData(): Promise<
           : null,
       averageThroughputMbps: null,
       runCount: 1,
+      congestionControlAlgorithmName,
+      clientFileSizeMegabytes: toNumber(run.client_file_size_megabytes),
+      queueBufferSizeKilobyte,
+      bottleneckRateMegabit,
     });
   }
 
