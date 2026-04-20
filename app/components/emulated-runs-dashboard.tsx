@@ -98,8 +98,8 @@ const METRICS: MetricSpec[] = [
   {
     id: "cwnd",
     title: "Congestion Window",
-    unit: "bytes",
-    accessor: (point) => point.congestionWindowBytes,
+    unit: "packets",
+    accessor: (point) => convertCwndBytesToPackets(point.congestionWindowBytes),
   },
 ];
 
@@ -118,6 +118,7 @@ const THROUGHPUT_AXIS_LIMIT_MULTIPLIER = 2;
 const THROUGHPUT_AXIS_TICK_COUNT = 5;
 const THROUGHPUT_SUM_SERIES_ID = -1;
 const X_AXIS_REFERENCE_POINT_COUNT = 8;
+const CWND_BYTES_PER_PACKET = 1500;
 
 function formatClientSummary(run: EmulatedRun | null) {
   if (!run) {
@@ -168,6 +169,16 @@ function formatSecondsValue(value: number) {
 
 function roundToHundredth(value: number) {
   return Number(value.toFixed(2));
+}
+
+function convertCwndBytesToPackets(bytes: number | null) {
+  if (bytes === null || !Number.isFinite(bytes)) {
+    return null;
+  }
+
+  // Snapshot stats store cwnd in bytes. Convert to approximate packet counts
+  // for chart display using a fixed packet size.
+  return bytes / CWND_BYTES_PER_PACKET;
 }
 
 function getPointXSeconds(point: EmulatedPerSecondStat, index: number) {

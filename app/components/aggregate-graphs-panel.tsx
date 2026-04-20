@@ -37,6 +37,8 @@ type ScatterHoverPoint = {
   parentRunId: number;
   delayAddedMs: number;
   flowCompletionTimeMs: number;
+  queueBufferSizeKilobyte: number | null;
+  clientFileSizeMegabytes: number | null;
   x: number;
   y: number;
 };
@@ -62,6 +64,8 @@ type EcdfHoverPoint = {
   delayAddedMs: number;
   flowCompletionTimeMs: number;
   percentile: number;
+  queueBufferSizeKilobyte: number | null;
+  clientFileSizeMegabytes: number | null;
   x: number;
   y: number;
 };
@@ -72,6 +76,8 @@ type ParentRunConnectionHoverPoint = {
   delayAddedMs: number;
   otherClientDelayMs: number | null;
   flowCompletionTimeMs: number;
+  queueBufferSizeKilobyte: number | null;
+  clientFileSizeMegabytes: number | null;
   x: number;
   y: number;
   pointColor: string;
@@ -635,6 +641,14 @@ function formatCommaSeparatedValues(
   return values.length > 0 ? values.map(formatter).join(", ") : emptyLabel;
 }
 
+function formatQueueBufferLabel(value: number | null) {
+  return value === null ? "n/a" : `${formatAxisValue(value)} KB`;
+}
+
+function formatWorkloadLabel(value: number | null) {
+  return value === null ? "n/a" : `${formatAxisValue(value)} MB`;
+}
+
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 function ScatterPlot({
   points,
@@ -651,7 +665,7 @@ function ScatterPlot({
     1,
   );
   const clientOrder = series.map((entry) => entry.clientNumber);
-  const tooltipHeight = 90;
+  const tooltipHeight = 126;
 
   if (points.length === 0) {
     return <EmptyChartState text="No run-level flow completion data available." />;
@@ -711,7 +725,7 @@ function ScatterPlot({
             r={HOVER_RADIUS}
             fill="transparent"
             tabIndex={0}
-            aria-label={`Client ${point.clientNumber}, parent run ${point.parentRunId}, added delay ${formatAxisValue(point.delayAddedMs)} ms, flow completion time ${formatFlowCompletionTimeLabel(point.flowCompletionTimeMs)}`}
+            aria-label={`Client ${point.clientNumber}, parent run ${point.parentRunId}, added delay ${formatAxisValue(point.delayAddedMs)} ms, flow completion time ${formatFlowCompletionTimeLabel(point.flowCompletionTimeMs)}, queue buffer ${formatQueueBufferLabel(point.queueBufferSizeKilobyte)}, workload ${formatWorkloadLabel(point.clientFileSizeMegabytes)}`}
             onMouseEnter={() =>
               setHoveredPoint({
                 clientNumber: point.clientNumber,
@@ -719,6 +733,8 @@ function ScatterPlot({
                 parentRunId: point.parentRunId,
                 delayAddedMs: point.delayAddedMs,
                 flowCompletionTimeMs: point.flowCompletionTimeMs,
+                queueBufferSizeKilobyte: point.queueBufferSizeKilobyte,
+                clientFileSizeMegabytes: point.clientFileSizeMegabytes,
                 x: point.x,
                 y: point.y,
               })
@@ -730,6 +746,8 @@ function ScatterPlot({
                 parentRunId: point.parentRunId,
                 delayAddedMs: point.delayAddedMs,
                 flowCompletionTimeMs: point.flowCompletionTimeMs,
+                queueBufferSizeKilobyte: point.queueBufferSizeKilobyte,
+                clientFileSizeMegabytes: point.clientFileSizeMegabytes,
                 x: point.x,
                 y: point.y,
               })
@@ -786,6 +804,20 @@ function ScatterPlot({
             className="fill-slate-300 text-[10px]"
           >
             {`Flow completion: ${formatFlowCompletionTimeLabel(hoveredPoint.flowCompletionTimeMs)}`}
+          </text>
+          <text
+            x={tooltipPosition.x + 14}
+            y={tooltipPosition.y + 92}
+            className="fill-slate-300 text-[10px]"
+          >
+            {`Queue buffer: ${formatQueueBufferLabel(hoveredPoint.queueBufferSizeKilobyte)}`}
+          </text>
+          <text
+            x={tooltipPosition.x + 14}
+            y={tooltipPosition.y + 110}
+            className="fill-slate-300 text-[10px]"
+          >
+            {`Workload: ${formatWorkloadLabel(hoveredPoint.clientFileSizeMegabytes)}`}
           </text>
         </g>
       ) : null}
@@ -917,7 +949,7 @@ function ParentRunConnectionChart({
           : null,
     };
   });
-  const tooltipHeight = 116;
+  const tooltipHeight = 166;
   const tooltipPosition = hoveredPoint
     ? buildScatterTooltipPosition(hoveredPoint, tooltipHeight)
     : null;
@@ -1218,7 +1250,7 @@ function ParentRunConnectionChart({
                     r={HOVER_RADIUS}
                     fill="transparent"
                     tabIndex={0}
-                    aria-label={`Parent ${point.parentRunId}, client ${point.clientNumber}, delay ${formatAxisValue(point.delayAddedMs)} ms, flow completion time ${formatFlowCompletionTimeLabel(point.flowCompletionTimeMs)}`}
+                    aria-label={`Parent ${point.parentRunId}, client ${point.clientNumber}, delay ${formatAxisValue(point.delayAddedMs)} ms, flow completion time ${formatFlowCompletionTimeLabel(point.flowCompletionTimeMs)}, queue buffer ${formatQueueBufferLabel(point.queueBufferSizeKilobyte)}, workload ${formatWorkloadLabel(point.clientFileSizeMegabytes)}`}
                     onMouseEnter={() => {
                       if (panState) {
                         return;
@@ -1236,6 +1268,8 @@ function ParentRunConnectionChart({
                         delayAddedMs: point.delayAddedMs,
                         otherClientDelayMs: otherClientPoint?.delayAddedMs ?? null,
                         flowCompletionTimeMs: point.flowCompletionTimeMs,
+                        queueBufferSizeKilobyte: point.queueBufferSizeKilobyte,
+                        clientFileSizeMegabytes: point.clientFileSizeMegabytes,
                         x: point.x,
                         y: point.y,
                         pointColor: colorForClientPoint(point.clientNumber),
@@ -1255,6 +1289,8 @@ function ParentRunConnectionChart({
                         delayAddedMs: point.delayAddedMs,
                         otherClientDelayMs: otherClientPoint?.delayAddedMs ?? null,
                         flowCompletionTimeMs: point.flowCompletionTimeMs,
+                        queueBufferSizeKilobyte: point.queueBufferSizeKilobyte,
+                        clientFileSizeMegabytes: point.clientFileSizeMegabytes,
                         x: point.x,
                         y: point.y,
                         pointColor: colorForClientPoint(point.clientNumber),
@@ -1320,6 +1356,20 @@ function ParentRunConnectionChart({
               className="fill-slate-200 text-[12px]"
             >
               {`Flow completion: ${formatFlowCompletionTimeLabel(hoveredPoint.flowCompletionTimeMs)}`}
+            </text>
+            <text
+              x={tooltipPosition.x + 14}
+              y={tooltipPosition.y + 125}
+              className="fill-slate-200 text-[12px]"
+            >
+              {`Queue buffer: ${formatQueueBufferLabel(hoveredPoint.queueBufferSizeKilobyte)}`}
+            </text>
+            <text
+              x={tooltipPosition.x + 14}
+              y={tooltipPosition.y + 150}
+              className="fill-slate-200 text-[12px]"
+            >
+              {`Workload: ${formatWorkloadLabel(hoveredPoint.clientFileSizeMegabytes)}`}
             </text>
           </g>
         ) : null}
@@ -1711,7 +1761,7 @@ function EcdfChart({
       };
     })
     .filter((entry) => entry.plottedPoints.length > 0);
-  const tooltipHeight = 106;
+  const tooltipHeight = 142;
   const tooltipPosition = hoveredPoint
     ? buildScatterTooltipPosition(hoveredPoint, tooltipHeight)
     : null;
@@ -1757,7 +1807,7 @@ function EcdfChart({
                 r={HOVER_RADIUS}
                 fill="transparent"
                 tabIndex={0}
-                aria-label={`Client ${point.clientNumber}, parent run ${point.parentRunId}, flow completion time ${formatFlowCompletionTimeLabel(point.flowCompletionTimeMs)}, percentile ${formatAxisValue(point.percentile)} percent`}
+                aria-label={`Client ${point.clientNumber}, parent run ${point.parentRunId}, flow completion time ${formatFlowCompletionTimeLabel(point.flowCompletionTimeMs)}, percentile ${formatAxisValue(point.percentile)} percent, queue buffer ${formatQueueBufferLabel(point.queueBufferSizeKilobyte)}, workload ${formatWorkloadLabel(point.clientFileSizeMegabytes)}`}
                 onMouseEnter={() =>
                   setHoveredPoint({
                     clientNumber: point.clientNumber,
@@ -1766,6 +1816,8 @@ function EcdfChart({
                     delayAddedMs: point.delayAddedMs,
                     flowCompletionTimeMs: point.flowCompletionTimeMs,
                     percentile: point.percentile,
+                    queueBufferSizeKilobyte: point.queueBufferSizeKilobyte,
+                    clientFileSizeMegabytes: point.clientFileSizeMegabytes,
                     x: point.x,
                     y: point.y,
                   })
@@ -1778,6 +1830,8 @@ function EcdfChart({
                     delayAddedMs: point.delayAddedMs,
                     flowCompletionTimeMs: point.flowCompletionTimeMs,
                     percentile: point.percentile,
+                    queueBufferSizeKilobyte: point.queueBufferSizeKilobyte,
+                    clientFileSizeMegabytes: point.clientFileSizeMegabytes,
                     x: point.x,
                     y: point.y,
                   })
@@ -1833,6 +1887,20 @@ function EcdfChart({
             className="fill-slate-300 text-[10px]"
           >
             {`Added delay: ${formatAxisValue(hoveredPoint.delayAddedMs)} ms`}
+          </text>
+          <text
+            x={tooltipPosition.x + 14}
+            y={tooltipPosition.y + 110}
+            className="fill-slate-300 text-[10px]"
+          >
+            {`Queue buffer: ${formatQueueBufferLabel(hoveredPoint.queueBufferSizeKilobyte)}`}
+          </text>
+          <text
+            x={tooltipPosition.x + 14}
+            y={tooltipPosition.y + 128}
+            className="fill-slate-300 text-[10px]"
+          >
+            {`Workload: ${formatWorkloadLabel(hoveredPoint.clientFileSizeMegabytes)}`}
           </text>
         </g>
       ) : null}
