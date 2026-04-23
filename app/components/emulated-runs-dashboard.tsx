@@ -59,6 +59,7 @@ type HoveredChartPoint = {
   y: number;
   xValue: number;
   yValue: number;
+  companionYValue: number | null;
 };
 
 type HoveredSliceValue = {
@@ -66,6 +67,7 @@ type HoveredSliceValue = {
   shortLabel: string;
   color: string;
   yValue: number;
+  companionYValue: number | null;
   pointX: number;
   pointY: number;
 };
@@ -191,6 +193,21 @@ function getPointXSeconds(point: EmulatedPerSecondStat, index: number) {
   }
 
   return roundToHundredth(index);
+}
+
+function getNearestPointByXValue<T extends { xValue: number; yValue: number }>(
+  points: T[],
+  xValue: number,
+) {
+  if (points.length === 0) {
+    return null;
+  }
+
+  return points.reduce((closest, point) =>
+    Math.abs(point.xValue - xValue) < Math.abs(closest.xValue - xValue)
+      ? point
+      : closest,
+  );
 }
 
 function getNiceStep(rawStep: number) {
@@ -608,6 +625,7 @@ function MetricChart({
   const [pinnedRunId, setPinnedRunId] = useState<number | null>(null);
   const [pinnedPoint, setPinnedPoint] = useState<HoveredChartPoint | null>(null);
   const [hiddenRunIds, setHiddenRunIds] = useState<number[]>([]);
+  const isCwndMetric = metricId === "cwnd";
   const isExpanded = size === "expanded";
   const areInlineChartInteractionsEnabled = isExpanded;
   const chartWidth = isExpanded ? 1200 : 460;
@@ -662,10 +680,26 @@ function MetricChart({
           };
         })
         .filter((point) => point !== null);
+      const companionPoints = isCwndMetric
+        ? runSeries.data
+            .map((point, index) => {
+              const xValue = getPointXSeconds(point, index);
+              const yValue = point.inFlightPackets;
+              if (!Number.isFinite(xValue) || !Number.isFinite(yValue)) {
+                return null;
+              }
+              return {
+                xValue: xValue as number,
+                yValue: yValue as number,
+              };
+            })
+            .filter((point) => point !== null)
+        : [];
 
       return {
         ...runSeries,
         points: points as Array<{ xValue: number; yValue: number }>,
+        companionPoints: companionPoints as Array<{ xValue: number; yValue: number }>,
       };
     })
     .filter((runSeries) => runSeries.points.length > 0);
@@ -702,10 +736,10 @@ function MetricChart({
   );
 
   const xValues = visibleNormalizedSeries.flatMap((runSeries) =>
-    runSeries.points.map((point) => point.xValue),
+    [...runSeries.points, ...runSeries.companionPoints].map((point) => point.xValue),
   );
   const yValues = visibleNormalizedSeries.flatMap((runSeries) =>
-    runSeries.points.map((point) => point.yValue),
+    [...runSeries.points, ...runSeries.companionPoints].map((point) => point.yValue),
   );
 
   const xMin = 0;
@@ -733,28 +767,55 @@ function MetricChart({
   const yDenominator = yMax === yMin ? 1 : yMax - yMin;
 
   const seriesForRender = visibleNormalizedSeries.map((runSeries) => {
-    const svgPoints = runSeries.points.map((point) => {
-      const boundedXValue = Math.max(xMin, Math.min(xMax, point.xValue));
-      const boundedYValue = Math.max(yMin, Math.min(yMax, point.yValue));
-      return {
-        xValue: point.xValue,
-        yValue: point.yValue,
-        x: leftPadding + ((boundedXValue - xMin) / xDenominator) * plotWidth,
-        y:
-          chartHeight -
-          bottomPadding -
-          ((boundedYValue - yMin) / yDenominator) * plotHeight,
-      };
-    });
+    const toSvgPoints = (points: Array<{ xValue: number; yValue: number }>) =>
+      points.map((point) => {
+        const boundedXValue = Math.max(xMin, Math.min(xMax, point.xValue));
+        const boundedYValue = Math.max(yMin, Math.min(yMax, point.yValue));
+        return {
+          xValue: point.xValue,
+          yValue: point.yValue,
+          x: leftPadding + ((boundedXValue - xMin) / xDenominator) * plotWidth,
+          y:
+            chartHeight -
+            bottomPadding -
+            ((boundedYValue - yMin) / yDenominator) * plotHeight,
+        };
+      });
 
-    const path = svgPoints
-      .map((point, index) => `${index === 0 ? "M" : "L"}${point.x} ${point.y}`)
-      .join(" ");
+    const buildPath = (
+      points: Array<{ x: number; y: number }>,
+    ) =>
+      points
+        .map((point, index) => `${index === 0 ? "M" : "L"}${point.x} ${point.y}`)
+        .join(" ");
+
+    const svgPoints = toSvgPoints(runSeries.points);
+    const companionSvgPoints = toSvgPoints(runSeries.companionPoints);
+    const companionPointLookup = new Map(
+      companionSvgPoints.map((point) => [point.xValue, point]),
+    );
+    const companionPointsByPrimaryX = svgPoints.flatMap((point) => {
+      const directPoint = companionPointLookup.get(point.xValue);
+      if (directPoint) {
+        return [directPoint];
+      }
+
+      const nearestPoint = getNearestPointByXValue(
+        companionSvgPoints,
+        point.xValue,
+      );
+      return nearestPoint ? [nearestPoint] : [];
+    });
+    const path = buildPath(svgPoints);
+    const companionPath = buildPath(companionSvgPoints);
 
     return {
       ...runSeries,
       svgPoints,
+      companionSvgPoints,
+      companionPointsByPrimaryX,
       path,
+      companionPath,
     };
   });
   const throughputSumForLegend =
@@ -802,8 +863,22 @@ function MetricChart({
             clientSummary: "sum Mbps",
             color: "#eab308",
             data: [] as EmulatedPerSecondStat[],
+            companionPoints: [] as Array<{ xValue: number; yValue: number }>,
             svgPoints,
+            companionSvgPoints: [] as Array<{
+              xValue: number;
+              yValue: number;
+              x: number;
+              y: number;
+            }>,
+            companionPointsByPrimaryX: [] as Array<{
+              xValue: number;
+              yValue: number;
+              x: number;
+              y: number;
+            }>,
             path,
+            companionPath: "",
           };
         })()
       : null;
@@ -831,9 +906,27 @@ function MetricChart({
   const hoverTargetPointRadius = isExpanded ? 14 : 10;
   const pointDotRadius = isExpanded ? 2.8 : 2.2;
   const pointHitRadius = hoverActivationRadius;
-  const tooltipWidth = isExpanded ? 140 : 116;
-  const tooltipHeight = isExpanded ? 50 : 44;
-  const sliceTooltipWidth = isExpanded ? 260 : 220;
+  const tooltipWidth = isCwndMetric
+    ? isExpanded
+      ? 204
+      : 184
+    : isExpanded
+      ? 140
+      : 116;
+  const tooltipHeight = isCwndMetric
+    ? isExpanded
+      ? 68
+      : 60
+    : isExpanded
+      ? 50
+      : 44;
+  const sliceTooltipWidth = isCwndMetric
+    ? isExpanded
+      ? 380
+      : 320
+    : isExpanded
+      ? 260
+      : 220;
   const sliceTooltipPaddingX = isExpanded ? 10 : 8;
   const sliceTooltipRowHeight = isExpanded ? 15 : 13;
 
@@ -853,6 +946,9 @@ function MetricChart({
     y: point.y,
     xValue: point.xValue,
     yValue: point.yValue,
+    companionYValue:
+      getNearestPointByXValue(runSeries.companionSvgPoints, point.xValue)?.yValue ??
+      null,
   });
 
   const setHoveredPointForRun = (
@@ -1003,6 +1099,9 @@ function MetricChart({
         shortLabel: runSeries.shortLabel,
         color: runSeries.color,
         yValue: nearestPoint.yValue,
+        companionYValue:
+          getNearestPointByXValue(runSeries.companionSvgPoints, nearestPoint.xValue)
+            ?.yValue ?? null,
         pointX: nearestPoint.x,
         pointY: nearestPoint.y,
       };
@@ -1178,8 +1277,25 @@ function MetricChart({
           All series hidden. Use the legend to show them again.
         </text>
       ) : null}
-      {interactiveSeriesForRender.map((runSeries) => (
+          {interactiveSeriesForRender.map((runSeries) => (
         <g key={runSeries.runId}>
+          {isCwndMetric && runSeries.companionSvgPoints.length >= 2 ? (
+            <path
+              d={runSeries.companionPath}
+              fill="none"
+              stroke={runSeries.color}
+              pointerEvents="none"
+              strokeWidth={activeRunId === runSeries.runId ? 2.4 : 1.8}
+              strokeDasharray={isExpanded ? "9 7" : "7 5"}
+              strokeLinecap="round"
+              opacity={
+                activeRunId === null || activeRunId === runSeries.runId ? 0.72 : 0.2
+              }
+              style={{
+                transition: "stroke-width 140ms ease, opacity 140ms ease",
+              }}
+            />
+          ) : null}
           {runSeries.svgPoints.length >= 2 ? (
             <>
               <path
@@ -1379,6 +1495,29 @@ function MetricChart({
           ) : null}
           {displayedPoint && displayedPoint.runId === runSeries.runId ? (
             <>
+              {isCwndMetric && displayedPoint.companionYValue !== null ? (() => {
+                const companionPoint = getNearestPointByXValue(
+                  runSeries.companionPointsByPrimaryX,
+                  displayedPoint.xValue,
+                );
+
+                if (!companionPoint) {
+                  return null;
+                }
+
+                return (
+                  <circle
+                    cx={companionPoint.x}
+                    cy={companionPoint.y}
+                    r={isExpanded ? 4.6 : 4}
+                    fill="#fff8fc"
+                    stroke={runSeries.color}
+                    strokeWidth={1.8}
+                    pointerEvents="none"
+                    opacity={0.95}
+                  />
+                );
+              })() : null}
               <circle
                 cx={displayedPoint.x}
                 cy={displayedPoint.y}
@@ -1480,7 +1619,13 @@ function MetricChart({
                                 : "fill-slate-700 text-[9px]"
                             }
                           >
-                            {value.shortLabel}: {formatScaleValue(value.yValue)} {unit}
+                            {isCwndMetric
+                              ? `${value.shortLabel}: cwnd ${formatScaleValue(value.yValue)} ${unit}, in-flight ${
+                                  value.companionYValue === null
+                                    ? "n/a"
+                                    : `${formatScaleValue(value.companionYValue)} ${unit}`
+                                }`
+                              : `${value.shortLabel}: ${formatScaleValue(value.yValue)} ${unit}`}
                           </text>
                         </g>
                       );
@@ -1536,15 +1681,32 @@ function MetricChart({
                         y={tooltipY + (isExpanded ? 31 : 27)}
                         className={isExpanded ? "fill-slate-700 text-[10px]" : "fill-slate-700 text-[9px]"}
                       >
-                        y ({unit}): {formatScaleValue(displayedPoint.yValue)}
+                        {isCwndMetric
+                          ? `cwnd (${unit}): ${formatScaleValue(displayedPoint.yValue)}`
+                          : `y (${unit}): ${formatScaleValue(displayedPoint.yValue)}`}
                       </text>
                       <text
                         x={tooltipX + 10}
                         y={tooltipY + (isExpanded ? 43 : 38)}
                         className={isExpanded ? "fill-slate-700 text-[10px]" : "fill-slate-700 text-[9px]"}
                       >
-                        x (seconds): {formatSecondsValue(displayedPoint.xValue)}
+                        {isCwndMetric
+                          ? `in-flight (${unit}): ${
+                              displayedPoint.companionYValue === null
+                                ? "n/a"
+                                : formatScaleValue(displayedPoint.companionYValue)
+                            }`
+                          : `x (seconds): ${formatSecondsValue(displayedPoint.xValue)}`}
                       </text>
+                      {isCwndMetric ? (
+                        <text
+                          x={tooltipX + 10}
+                          y={tooltipY + (isExpanded ? 55 : 49)}
+                          className={isExpanded ? "fill-slate-700 text-[10px]" : "fill-slate-700 text-[9px]"}
+                        >
+                          x (seconds): {formatSecondsValue(displayedPoint.xValue)}
+                        </text>
+                      ) : null}
                     </>
                   );
                 })()
@@ -1616,6 +1778,12 @@ function MetricChart({
             chartSvg
           )}
         </div>
+        {isCwndMetric ? (
+          <p className="mt-3 text-[11px] text-slate-500 dark:text-slate-400">
+            Solid line shows cwnd. Dashed line shows in-flight packets for the
+            same client.
+          </p>
+        ) : null}
         <div className="mt-3 flex flex-wrap gap-2">
           {legendSeries.map((runSeries) => {
             const isHidden = hiddenRunIds.includes(runSeries.runId);
