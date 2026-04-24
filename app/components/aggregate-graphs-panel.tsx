@@ -262,6 +262,22 @@ function scaleChartYWithinDomain(
   );
 }
 
+function isWithinHoverRadius(
+  x: number,
+  y: number,
+  points: Array<{ x: number; y: number }>,
+  radius = HOVER_RADIUS,
+) {
+  const radiusSquared = radius ** 2;
+
+  return points.some((point) => {
+    const deltaX = point.x - x;
+    const deltaY = point.y - y;
+
+    return deltaX ** 2 + deltaY ** 2 <= radiusSquared;
+  });
+}
+
 function invertChartXPosition(
   x: number,
   minValue: number,
@@ -1113,6 +1129,23 @@ function ParentRunConnectionChart({
 
   function handlePanMove(event: React.PointerEvent<SVGSVGElement>) {
     if (!panState || panState.pointerId !== event.pointerId) {
+      if (!hoveredPoint) {
+        return;
+      }
+
+      const bounds = event.currentTarget.getBoundingClientRect();
+      const pointerX =
+        ((event.clientX - bounds.left) / bounds.width) * CHART_WIDTH;
+      const pointerY =
+        ((event.clientY - bounds.top) / bounds.height) * CHART_HEIGHT;
+      const visiblePoints = connectedRuns.flatMap((run) =>
+        run.points.map((point) => ({ x: point.x, y: point.y })),
+      );
+
+      if (!isWithinHoverRadius(pointerX, pointerY, visiblePoints)) {
+        setHoveredPoint(null);
+      }
+
       return;
     }
 
@@ -2946,7 +2979,7 @@ export function AggregateGraphsPanel({
   return (
     <main className="space-atmosphere relative min-h-screen overflow-hidden p-5 sm:p-10">
       <div className="relative z-10 mx-auto flex min-h-[calc(100vh-5rem)] w-full max-w-7xl items-center justify-center py-3 sm:py-8">
-        <section className="w-full rounded-[2rem] border border-rose-200/70 bg-[#fff8fc]/95 p-6 shadow-2xl dark:border-slate-600 dark:bg-slate-800/82 sm:p-8">
+        <section className="fade-up-on-load w-full rounded-[2rem] border border-rose-200/70 bg-[#fff8fc]/95 p-6 shadow-2xl dark:border-slate-600 dark:bg-slate-800/82 sm:p-8">
           <div className="flex items-start justify-between gap-4">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.28em] text-teal-700">
@@ -2956,9 +2989,6 @@ export function AggregateGraphsPanel({
                 Aggregate Graphs
               </h1>
               <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
-                Focused view of connected client lines across aggregate runs.
-              </p>
-              <p className="mt-3 text-sm text-slate-600 dark:text-slate-300">
                 Showing {filteredFlowPoints.length} plotted parent-run/client
                 points across {totalSelectedTests} selected tests.
               </p>
@@ -2985,17 +3015,30 @@ export function AggregateGraphsPanel({
           </div>
 
           <div className="mt-6 grid gap-6 lg:grid-cols-[260px_minmax(0,1fr)]">
-            <aside className="rounded-[1.75rem] border border-rose-200/80 bg-[#fff3f8] p-4 shadow-inner dark:border-slate-600 dark:bg-slate-900/60 sm:p-5">
-              <div className="rounded-2xl border border-rose-200/80 bg-[#fff8fc] p-4 dark:border-slate-600 dark:bg-slate-800/55">
+            <aside className="flex items-start">
+              <div className="fade-up-on-load-delay-2 rounded-[1.75rem] border border-rose-200/80 bg-[#fff3f8] p-4 shadow-inner dark:border-slate-600 dark:bg-slate-900/60 sm:p-5">
                 <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500 dark:text-slate-400">
                   Test Selection
                 </p>
                 <button
                   type="button"
                   onClick={() => setIsTestModalOpen(true)}
-                  className="mt-3 w-full rounded-xl border border-rose-300/80 bg-white px-3 py-2 text-sm font-medium text-slate-800 transition hover:border-rose-400 hover:bg-rose-50 dark:border-slate-500 dark:bg-slate-700/80 dark:text-slate-100 dark:hover:border-slate-400 dark:hover:bg-slate-700"
+                  className="group mt-3 flex w-full items-center justify-between rounded-xl border border-rose-500/80 bg-rose-500 px-3 py-2 text-sm font-medium text-white shadow-sm transition hover:-translate-y-0.5 hover:border-rose-600 hover:bg-rose-600 hover:shadow-[0_12px_24px_-16px_rgba(190,24,93,0.55)] dark:border-emerald-400/80 dark:bg-emerald-400 dark:text-slate-950 dark:hover:border-emerald-300 dark:hover:bg-emerald-300 dark:hover:shadow-[0_12px_24px_-16px_rgba(52,211,153,0.55)]"
                 >
-                  Select Available Tests
+                  <span>Select Available Tests</span>
+                  <svg
+                    viewBox="0 0 24 24"
+                    className="h-4 w-4 transition-transform duration-200 group-hover:translate-x-1"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.9"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="M5 12h14" />
+                    <path d="m13 6 6 6-6 6" />
+                  </svg>
                 </button>
                 <p className="mt-3 text-sm text-slate-600 dark:text-slate-300">
                   {selectedTestCountLabel}
@@ -3005,21 +3048,25 @@ export function AggregateGraphsPanel({
 
             <div className="space-y-6">
               {filteredFlowPoints.length > 0 ? (
-                <ChartCard
-                  eyebrow="Parent Runs"
-                  title="Connected Client Lines"
-                  subtitle="Every parent run is shown on one plot with added delay on the x axis. Each run gets its own color, and that run's client points are connected directly."
-                >
-                  <ParentRunConnectionChart points={filteredFlowPoints} />
-                </ChartCard>
+                <div className="fade-up-on-load-delay-1">
+                  <ChartCard
+                    eyebrow="Parent Runs"
+                    title="Connected Client Lines"
+                    subtitle="Every parent run is shown on one plot with added delay on the x axis. Each run gets its own color, and that run's client points are connected directly."
+                  >
+                    <ParentRunConnectionChart points={filteredFlowPoints} />
+                  </ChartCard>
+                </div>
               ) : (
-                <ChartCard
-                  eyebrow="Test Selection"
-                  title="No Tests Selected"
-                  subtitle="Open the test selector to choose one or more parent runs to include in the aggregate graph."
-                >
-                  <EmptyChartState text="No tests are currently selected." />
-                </ChartCard>
+                <div className="fade-up-on-load-delay-1">
+                  <ChartCard
+                    eyebrow="Test Selection"
+                    title="No Tests Selected"
+                    subtitle="Open the test selector to choose one or more parent runs to include in the aggregate graph."
+                  >
+                    <EmptyChartState text="No tests are currently selected." />
+                  </ChartCard>
+                </div>
               )}
             </div>
           </div>

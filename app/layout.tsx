@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
-import { AuthButton } from "@/app/components/auth-button";
 import { ThemeToggle } from "@/app/components/theme-toggle";
 import "./globals.css";
 
@@ -15,8 +14,11 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Jumpserve Front End",
-  description: "Next.js + Supabase + TailwindCSS starter",
+  title: {
+    default: "Jumpserve",
+    template: "%s | Jumpserve",
+  },
+  description: "Explore Jumpserve emulation runs, inspect individual traces, and compare aggregate graph patterns.",
 };
 
 const themeInitScript = `
@@ -51,7 +53,6 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
-        <AuthButton />
         {children}
         <ThemeToggle />
       </body>

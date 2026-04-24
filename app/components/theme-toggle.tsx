@@ -1,90 +1,13 @@
 "use client";
 
 import { useSyncExternalStore } from "react";
-
-type ThemePreference = "light" | "dark" | "system";
-
-const STORAGE_KEY = "theme-preference";
-const DARK_MEDIA_QUERY = "(prefers-color-scheme: dark)";
-const listeners = new Set<() => void>();
-
-function parsePreference(value: string | null): ThemePreference {
-  return value === "light" || value === "dark" || value === "system"
-    ? value
-    : "system";
-}
-
-function readPreference(): ThemePreference {
-  if (typeof window === "undefined") {
-    return "system";
-  }
-  return parsePreference(window.localStorage.getItem(STORAGE_KEY));
-}
-
-function resolveDarkMode(preference: ThemePreference) {
-  if (preference === "dark") {
-    return true;
-  }
-  if (preference === "light") {
-    return false;
-  }
-  return window.matchMedia(DARK_MEDIA_QUERY).matches;
-}
-
-function applyTheme(preference: ThemePreference) {
-  const darkMode = resolveDarkMode(preference);
-  document.documentElement.classList.toggle("dark", darkMode);
-  document.documentElement.style.colorScheme = darkMode ? "dark" : "light";
-}
-
-function emitThemePreferenceChange() {
-  listeners.forEach((listener) => listener());
-}
-
-function subscribe(listener: () => void) {
-  if (typeof window === "undefined") {
-    return () => {};
-  }
-
-  listeners.add(listener);
-
-  const mediaQuery = window.matchMedia(DARK_MEDIA_QUERY);
-  const handleSystemThemeChange = () => {
-    if (readPreference() === "system") {
-      applyTheme("system");
-      listener();
-    }
-  };
-  const handleStorageChange = (event: StorageEvent) => {
-    if (event.key === STORAGE_KEY) {
-      applyTheme(readPreference());
-      listener();
-    }
-  };
-
-  mediaQuery.addEventListener("change", handleSystemThemeChange);
-  window.addEventListener("storage", handleStorageChange);
-
-  return () => {
-    listeners.delete(listener);
-    mediaQuery.removeEventListener("change", handleSystemThemeChange);
-    window.removeEventListener("storage", handleStorageChange);
-  };
-}
-
-function getServerSnapshot(): ThemePreference {
-  return "system";
-}
-
-function setThemePreference(nextPreference: ThemePreference) {
-  if (typeof window === "undefined") {
-    return;
-  }
-
-  window.localStorage.setItem(STORAGE_KEY, nextPreference);
-  applyTheme(nextPreference);
-  emitThemePreferenceChange();
-}
+import {
+  getServerThemePreferenceSnapshot,
+  getThemePreferenceSnapshot,
+  setThemePreference,
+  subscribeToThemePreference,
+  type ThemePreference,
+} from "@/lib/theme-preference";
 
 function getNextPreference(preference: ThemePreference): ThemePreference {
   if (preference === "system") {
@@ -157,9 +80,9 @@ function SystemThemeIcon() {
 
 export function ThemeToggle() {
   const preference = useSyncExternalStore(
-    subscribe,
-    readPreference,
-    getServerSnapshot,
+    subscribeToThemePreference,
+    () => getThemePreferenceSnapshot().preference,
+    () => getServerThemePreferenceSnapshot().preference,
   );
   const nextPreference = getNextPreference(preference);
   const currentLabel = getPreferenceLabel(preference);

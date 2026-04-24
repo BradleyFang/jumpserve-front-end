@@ -21,7 +21,7 @@ type ParentRunFilterState = {
 
 const CLIENT_COUNT_OPTIONS = [2, 3, 4];
 const FILTER_OPTION_PREVIEW_COUNT = 6;
-const PARENT_RUN_PAGE_SIZE = 30;
+const PARENT_RUN_PAGE_SIZE = 10;
 
 type RangeBucket = {
   start: number;
@@ -815,7 +815,7 @@ export function ParentRunIndex({
   return (
     <section className="w-full max-w-7xl">
       <div className="grid gap-7 lg:grid-cols-[300px_minmax(0,1fr)]">
-        <article className="relative h-fit overflow-hidden rounded-3xl border border-rose-200/80 bg-[linear-gradient(165deg,rgba(255,250,253,0.98)_0%,rgba(255,241,248,0.96)_100%)] p-5 shadow-[0_20px_45px_rgba(190,24,93,0.12)] backdrop-blur-sm dark:border-slate-600/70 dark:bg-[linear-gradient(165deg,rgba(30,41,59,0.9)_0%,rgba(51,65,85,0.82)_100%)] dark:shadow-none lg:sticky lg:top-6">
+        <article className="fade-up-on-load relative h-fit overflow-hidden rounded-3xl border border-rose-200/80 bg-[linear-gradient(165deg,rgba(255,250,253,0.98)_0%,rgba(255,241,248,0.96)_100%)] p-5 shadow-[0_20px_45px_rgba(190,24,93,0.12)] backdrop-blur-sm dark:border-slate-600/70 dark:bg-[linear-gradient(165deg,rgba(30,41,59,0.9)_0%,rgba(51,65,85,0.82)_100%)] dark:shadow-none lg:sticky lg:top-6">
           <div className="pointer-events-none absolute -right-7 -top-7 h-28 w-28 rounded-full bg-rose-200/60 blur-2xl dark:bg-teal-500/25" />
           <div className="relative">
             <div className="flex items-center justify-between gap-3">
@@ -1348,7 +1348,26 @@ export function ParentRunIndex({
           </button>
         </article>
 
-        <article className="flex min-h-[32rem] flex-col rounded-3xl border border-rose-200/70 bg-[linear-gradient(165deg,rgba(255,250,253,0.98)_0%,rgba(255,245,250,0.97)_100%)] p-6 shadow-[0_22px_50px_rgba(15,23,42,0.12)] backdrop-blur-sm dark:border-slate-600/70 dark:bg-[linear-gradient(165deg,rgba(30,41,59,0.91)_0%,rgba(51,65,85,0.83)_100%)] dark:shadow-none sm:p-8 lg:min-h-[calc(100dvh-9rem)]">
+        <article className="fade-up-on-load-delay-1 relative flex min-h-[32rem] flex-col rounded-3xl border border-rose-200/70 bg-[linear-gradient(165deg,rgba(255,250,253,0.98)_0%,rgba(255,245,250,0.97)_100%)] p-6 shadow-[0_22px_50px_rgba(15,23,42,0.12)] backdrop-blur-sm dark:border-slate-600/70 dark:bg-[linear-gradient(165deg,rgba(30,41,59,0.91)_0%,rgba(51,65,85,0.83)_100%)] dark:shadow-none sm:p-8 lg:min-h-[calc(100dvh-9rem)]">
+          <Link
+            href="/"
+            aria-label="Go to home"
+            className="absolute top-6 right-6 inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-rose-300/80 bg-[#fff5fb] text-slate-700 shadow-sm transition hover:border-rose-400 hover:bg-rose-50 dark:border-slate-500 dark:bg-slate-800/85 dark:text-slate-100 dark:hover:border-slate-400 dark:hover:bg-slate-700/90"
+          >
+            <svg
+              viewBox="0 0 24 24"
+              className="h-5 w-5"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.9"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M3 10.5 12 3l9 7.5" />
+              <path d="M6 10v10h12V10" />
+              <path d="M10 20v-6h4v6" />
+            </svg>
+          </Link>
           <p className="text-center text-xs font-semibold uppercase tracking-[0.28em] text-teal-700">
             Jumpserve
           </p>
@@ -1359,9 +1378,7 @@ export function ParentRunIndex({
             Search and open a parent run.
           </p>
           <p className="mt-5 text-center text-xs uppercase tracking-[0.14em] text-slate-500 dark:text-slate-300">
-            Page {currentPage} of {totalPages}. Showing {filteredParentRuns.length}{" "}
-            matching rows from {pageData.pageSize} tests on this page and{" "}
-            {totalCount} total tests
+            showing {pageData.parentRuns.length} of {totalCount} total tests
           </p>
           <div className="mt-4 flex justify-end">
             <div className="inline-flex rounded-xl border border-rose-200 bg-white/90 p-1 dark:border-slate-500 dark:bg-slate-800/75">
@@ -1393,7 +1410,7 @@ export function ParentRunIndex({
           </div>
 
           <div
-            className={`mx-auto mt-4 min-h-0 flex-1 overflow-y-auto px-1 pb-1 ${
+            className={`fade-up-on-load-delay-2 mx-auto mt-4 min-h-0 flex-1 overflow-y-auto px-1 pb-1 ${
               parentRunView === "list"
                 ? "max-w-6xl"
                 : "grid max-w-6xl content-start gap-3 md:grid-cols-2 xl:grid-cols-3"

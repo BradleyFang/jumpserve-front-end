@@ -13,6 +13,8 @@
   --atmo-cloud-2: rgba(125, 211, 252, 0.26);
   --atmo-cloud-3: rgba(251, 191, 36, 0.24);
   --atmo-cloud-4: rgba(186, 230, 253, 0.2);
+  --star-opacity-min: 0.68;
+  --star-opacity-max: 1;
 }
 
 @theme inline {
@@ -34,6 +36,8 @@
   --atmo-cloud-2: rgba(16, 185, 129, 0.23);
   --atmo-cloud-3: rgba(147, 51, 234, 0.24);
   --atmo-cloud-4: rgba(20, 184, 166, 0.18);
+  --star-opacity-min: 0.34;
+  --star-opacity-max: 0.62;
 }
 
 body {
@@ -57,10 +61,10 @@ body {
 @keyframes twinklePulse {
   0%,
   100% {
-    opacity: 0.34;
+    opacity: var(--star-opacity-min);
   }
   50% {
-    opacity: 0.62;
+    opacity: var(--star-opacity-max);
   }
 }
 
@@ -70,6 +74,17 @@ body {
   }
   100% {
     transform: translate3d(-70px, 52px, 0);
+  }
+}
+
+@keyframes chooserFadeUp {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 56px, 0);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
   }
 }
 
@@ -110,4 +125,29 @@ body {
   background-size: 150px 150px, 220px 220px, 290px 290px;
   background-position: 20px 26px, 90px 140px, 142px 52px;
   animation: twinklePulse 5.5s ease-in-out infinite, starDrift 42s linear infinite;
+}
+
+.chooser-fade-up {
+  animation: chooserFadeUp 900ms cubic-bezier(0.22, 1, 0.36, 1) 300ms both;
+  will-change: opacity, transform;
+}
+
+.chooser-fade-up-late {
+  animation: chooserFadeUp 900ms cubic-bezier(0.22, 1, 0.36, 1) 600ms both;
+  will-change: opacity, transform;
+}
+
+.fade-up-on-load {
+  animation: chooserFadeUp 900ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  will-change: opacity, transform;
+}
+
+.fade-up-on-load-delay-1 {
+  animation: chooserFadeUp 900ms cubic-bezier(0.22, 1, 0.36, 1) 450ms both;
+  will-change: opacity, transform;
+}
+
+.fade-up-on-load-delay-2 {
+  animation: chooserFadeUp 900ms cubic-bezier(0.22, 1, 0.36, 1) 900ms both;
+  will-change: opacity, transform;
 }
