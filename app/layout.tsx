@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { AuthButton } from "@/app/components/auth-button";
 import { ThemeToggle } from "@/app/components/theme-toggle";
 import "./globals.css";
 
@@ -50,6 +51,7 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
+        <AuthButton />
         {children}
         <ThemeToggle />
       </body>

@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { AnimatedImageUploadPanel } from "@/app/components/animated-image-upload-panel";
 import { ParentRunIndex } from "@/app/components/parent-run-index";
 import { fetchParentRunsForIndexPage } from "@/lib/emulated-runs-data";
 
@@ -19,6 +20,7 @@ export default async function Home() {
             aggregate graphs
           </Link>
         </div>
+        <AnimatedImageUploadPanel />
         <div className="flex w-full items-start justify-center">
         {parentRunPage.parentRuns.length > 0 ? (
           <ParentRunIndex
