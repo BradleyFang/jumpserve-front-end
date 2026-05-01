@@ -9,7 +9,10 @@ export async function TestLookupHome() {
   });
 
   return (
-    <main className="space-atmosphere relative min-h-screen overflow-hidden p-5 sm:p-10">
+    <main
+      className="space-atmosphere relative min-h-screen overflow-hidden p-5 sm:p-10"
+      style={{ fontFamily: "Georgia, 'Times New Roman', serif" }}
+    >
       <div className="relative z-10 mx-auto flex w-full max-w-6xl flex-col gap-4 py-3 sm:py-8">
         <div className="flex w-full items-start justify-center">
           {parentRunPage.parentRuns.length > 0 ? (

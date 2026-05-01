@@ -156,6 +156,10 @@ export function LandingPageShell() {
     setPreviewPreference(preference);
   }
 
+  function handlePreviewEnd() {
+    setPreviewPreference(null);
+  }
+
   return (
     <main className="space-atmosphere relative min-h-screen overflow-hidden">
       {isThemeChooserVisible ? (
@@ -182,7 +186,9 @@ export function LandingPageShell() {
                       className={getThemeOptionCircleClassName(option.id)}
                       style={getThemeOptionCircleStyle(option.id)}
                       onMouseEnter={() => handlePreviewStart(option.id)}
+                      onMouseLeave={handlePreviewEnd}
                       onFocus={() => handlePreviewStart(option.id)}
+                      onBlur={handlePreviewEnd}
                     >
                       <ThemeIcon preference={option.id} />
                     </span>
